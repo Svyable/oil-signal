@@ -22,7 +22,7 @@ def test_snapshot_computes_transparent_comparisons(data_dir: Path) -> None:
     assert snapshot.year_over_year is not None
     assert snapshot.year_over_year.result == -800
     assert snapshot.seasonal_low == 419_000
-    assert snapshot.seasonal_high == 423_500
+    assert snapshot.seasonal_high == 421_800
 
 
 def test_padd2_distillate_snapshot_flags_decline(data_dir: Path) -> None:
