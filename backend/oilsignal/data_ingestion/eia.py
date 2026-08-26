@@ -27,7 +27,7 @@ class EIAClient:
         self.base_url = base_url.rstrip("/")
 
     async def fetch(self, request: EIASeriesRequest) -> dict[str, Any]:
-        params: list[tuple[str, str]] = [
+        params: list[tuple[str, str | int | float | bool | None]] = [
             ("api_key", self.api_key),
             ("frequency", request.frequency),
         ]
