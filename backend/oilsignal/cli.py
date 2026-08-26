@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from oilsignal.alerts.engine import AlertPolicySet, evaluate_policies
 from oilsignal.config import settings
 from oilsignal.data_ingestion.eia import EIAClient
 from oilsignal.data_ingestion.live import EIAIngestor
@@ -36,6 +37,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     report.add_argument("--format", choices=["markdown", "html", "json"], default="markdown")
     report.add_argument("--data-dir", type=Path, default=settings.data_dir)
+
+    alerts = subparsers.add_parser(
+        "alerts-evaluate",
+        help="evaluate composite alert policies against the latest dataset",
+    )
+    alerts.add_argument("--rules", type=Path, required=True)
+    alerts.add_argument("--data-dir", type=Path, default=settings.data_dir)
     return parser
 
 
@@ -47,6 +55,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_eia_metadata(args.route, args.facet))
     if args.command == "report":
         return _report(args.type, args.format, args.data_dir)
+    if args.command == "alerts-evaluate":
+        return _alerts_evaluate(args.rules, args.data_dir)
     raise RuntimeError(f"unhandled command: {args.command}")
 
 
@@ -73,6 +83,13 @@ def _report(report_type: str, output_format: str, data_dir: Path) -> int:
     }
     report = builders[report_type].build(load_latest_observations(data_dir))
     print(render_report(report, output_format))
+    return 0
+
+
+def _alerts_evaluate(rules_path: Path, data_dir: Path) -> int:
+    policy_set = AlertPolicySet.load(rules_path)
+    result = evaluate_policies(load_latest_observations(data_dir), policy_set)
+    print(result.model_dump_json(indent=2))
     return 0
 
 

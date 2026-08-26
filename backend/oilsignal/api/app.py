@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from oilsignal.alerts.engine import AlertEvaluationResult, AlertPolicySet, evaluate_policies
 from oilsignal.analytics.petroleum import build_snapshot
 from oilsignal.config import settings
 from oilsignal.models import Citation, Observation, Report
@@ -150,6 +151,13 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         try:
             report = WeeklyPetroleumBrief().build(load_latest_observations(app.state.data_dir))
             return RenderedReport(format=format, content=render_report(report, format))
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/alerts/evaluate", response_model=AlertEvaluationResult)
+    def alert_evaluation(policy_set: AlertPolicySet) -> AlertEvaluationResult:
+        try:
+            return evaluate_policies(load_latest_observations(app.state.data_dir), policy_set)
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 

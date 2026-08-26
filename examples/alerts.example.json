@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "policies": [
+    {
+      "policy_id": "midwest-distillate-tightness",
+      "name": "Midwest distillate tightness",
+      "message": "PADD 2 distillate inventory is low while U.S. refinery utilization is also soft.",
+      "mode": "all",
+      "conditions": [
+        {
+          "rule_id": "padd2-distillate-below-27m",
+          "series_id": "PET.DISTP2.W",
+          "field": "current",
+          "operator": "lt",
+          "threshold": 27000,
+          "message": "PADD 2 distillate stocks below 27 million barrels"
+        },
+        {
+          "rule_id": "utilization-below-91",
+          "series_id": "PET.UTILUS.W",
+          "field": "current",
+          "operator": "lt",
+          "threshold": 91,
+          "message": "U.S. refinery utilization below 91 percent"
+        }
+      ]
+    }
+  ]
+}

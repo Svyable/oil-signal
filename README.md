@@ -17,7 +17,7 @@ flowchart LR
     STORE --> CALC[Deterministic analytics]
     CALC --> CLAIM[Typed claims + citations]
     CLAIM --> GATE[Claim validator]
-    GATE --> BRIEF[Briefs / alerts / Q&A]
+    GATE --> BRIEF[Briefs / composite alerts / Q&A]
     BRIEF --> UI[React dashboard]
 ```
 
@@ -26,13 +26,15 @@ A model can help explain evidence, but it is never the source of truth. OilSigna
 ## What is implemented
 
 - Typed petroleum observations with source URL, series ID, observation date, fetch time, and raw SHA-256.
-- Idempotent offline fixture ingestion into Parquet with SQLModel ingestion metadata.
+- Idempotent offline fixture ingestion and configurable live EIA v2 ingestion into Parquet with SQLModel run metadata.
+- EIA route/facet discovery CLI so production mappings can be verified against the API instead of hardcoded blindly.
+- Fail-closed live ingestion for truncated API responses, duplicate periods from under-constrained facets, invalid frequencies, and non-numeric values.
 - Transparent week-over-week, four-week average, year-over-year, seasonal-range, and z-score calculations.
 - Structured `CalculationTrace`, `Citation`, `Claim`, and `Report` models.
 - Claim validator that rejects uncited market claims and unlinked calculation claims.
-- Weekly Petroleum Brief in JSON, Markdown, and HTML.
-- Rule-based threshold alerts with pluggable delivery interface and console adapter.
-- FastAPI report and cited Q&A endpoints.
+- Weekly Petroleum Brief, Distillate Supply Risk Brief, and Refinery Utilization Watch in JSON, Markdown, and HTML.
+- Single-signal threshold rules plus composite `all`/`any` alert policies with per-condition audit traces.
+- FastAPI report, alert-evaluation, readiness, and cited Q&A endpoints.
 - React/Vite dashboard showing claims and the evidence table.
 - Optional OpenAI-compatible LLM client for local or hosted endpoints.
 - Docker Compose, pytest, Ruff, mypy, pre-commit, and GitHub Actions.
@@ -51,7 +53,8 @@ Open:
 
 - Dashboard: `http://localhost:3000`
 - FastAPI docs: `http://localhost:8000/docs`
-- Health check: `http://localhost:8000/health`
+- Liveness: `http://localhost:8000/health`
+- Data readiness: `http://localhost:8000/health/ready`
 
 On an empty data volume, Compose loads the synthetic fixture once so the UI is immediately usable. Delete the `oilsignal-data` volume when you intentionally want a clean local data store.
 
@@ -76,6 +79,12 @@ python examples/ingest_fixture.py
 python examples/generate_weekly_brief.py
 ```
 
+The installed CLI can render the same report path:
+
+```bash
+oilsignal report --type weekly --format markdown --data-dir ./data
+```
+
 Run the API:
 
 ```bash
@@ -90,16 +99,28 @@ npm install
 npm run dev
 ```
 
-## EIA API key setup
+## Live EIA ingestion
 
-Tests and the synthetic demo do not require a key. For live connector development:
+Tests and the synthetic demo do not require a key. For live connector use:
 
 ```bash
-cp .env.example .env
-# edit .env and set EIA_API_KEY
+export OILSIGNAL_EIA_API_KEY=your-key
 ```
 
-For direct Python use, set `OILSIGNAL_EIA_API_KEY`. See [`docs/eia-setup.md`](docs/eia-setup.md) and [`examples/eia-series.example.json`](examples/eia-series.example.json). The example intentionally leaves route/series values as placeholders so the repository does not pretend a stale route is authoritative.
+Discover a current EIA route and its facets:
+
+```bash
+oilsignal eia-metadata --route petroleum/sum/sndw
+oilsignal eia-metadata --route petroleum/sum/sndw --facet <facet-id>
+```
+
+Create a registry from [`examples/eia-series.example.json`](examples/eia-series.example.json), constrain each canonical series to one row per period, then ingest:
+
+```bash
+oilsignal ingest-eia --registry ./my-eia-series.json --data-dir ./data
+```
+
+OilSignal retains raw JSON per configured series, hashes the source payload into each observation, and stores a public dataset URL without the API key. If EIA reports more rows than were returned, ingestion fails rather than accepting a silently truncated history. See [`docs/eia-setup.md`](docs/eia-setup.md).
 
 ## API examples
 
@@ -125,29 +146,40 @@ curl -X POST http://localhost:8000/api/ask \
 
 The response contains both `answer` and structured `evidence` objects.
 
-## Scheduling
+## Composite alerts
 
-The report generator is intentionally cron-friendly:
+Alert policies are data, not code. The included example requires both a low PADD 2 distillate inventory signal and soft refinery utilization:
 
 ```bash
-0 7 * * 1 cd /srv/oil-signal && .venv/bin/python examples/generate_weekly_brief.py > /var/reports/oilsignal-weekly.md
+oilsignal alerts-evaluate --rules examples/alerts.example.json --data-dir ./data
 ```
 
-Managed email/Slack/Teams delivery can plug into the same validated report boundary; the community core does not need a hosted service to generate or inspect the report.
+Or evaluate a policy set through `POST /api/alerts/evaluate`. Every policy response includes each condition's series ID, metric field, comparison operator, threshold, observed value, observation date, and match result. Missing series fail that condition instead of being inferred.
+
+## Scheduling
+
+The CLI is intentionally cron-friendly:
+
+```bash
+0 6 * * 3 cd /srv/oil-signal && .venv/bin/oilsignal ingest-eia --registry config/eia.json --data-dir data
+0 7 * * 1 cd /srv/oil-signal && .venv/bin/oilsignal report --type weekly --format markdown --data-dir data > /var/reports/oilsignal-weekly.md
+```
+
+Managed email/Slack/Teams delivery can plug into the same validated report and alert boundaries; the community core does not need a hosted service to generate or inspect them.
 
 ## Repository layout
 
 ```text
 backend/oilsignal/
 ├── agent/          # typed tools, validator, optional LLM client
-├── alerts/         # transparent threshold rules + delivery protocol
+├── alerts/         # threshold rules, composite policies, delivery protocol
 ├── analytics/      # deterministic petroleum time-series calculations
 ├── api/            # FastAPI endpoints
-├── data_ingestion/ # EIA abstraction + offline idempotent fixtures
+├── data_ingestion/ # EIA client/registry/live ingestion + offline fixtures
 ├── reports/        # cited report builders + renderers
-└── storage/        # SQLModel metadata
+└── storage/        # Parquet dataset utilities + SQLModel metadata
 frontend/           # React + TypeScript + Vite
-examples/           # offline ingestion and report CLI examples
+examples/           # offline ingestion, EIA registry, alert policies
 tests/              # network-free fixtures and acceptance tests
 docs/               # architecture, provenance, safety, open-core model
 ```
@@ -162,13 +194,12 @@ Community code is Apache-2.0 with no artificial feature lockouts. A commercial h
 
 ## Roadmap
 
-1. Production EIA petroleum route mappings and normalized live ingestion jobs.
-2. More U.S. series: gasoline, jet fuel, imports, implied demand, refinery balances, and PADD-level inventories.
-3. Data-release calendar and scheduler with freshness/SLA checks.
-4. Configurable multi-signal alerts combining inventory, utilization, and optional customer price data.
-5. Evaluation suite for claim coverage, citation accuracy, and explanation faithfulness.
-6. Optional private connectors and organization knowledge boundaries.
-7. Facility/emissions intelligence module using public EPA data after the fundamentals workflow is mature.
+1. Verify and publish maintained production EIA petroleum registries for crude, gasoline, distillate, jet fuel, imports, product supplied, utilization, and PADD inventories.
+2. Add release-calendar-aware scheduling, freshness/SLA checks, and stale-data suppression for alerts.
+3. Add richer configurable multi-signal policies, cooldown/deduplication, and delivery receipts.
+4. Expand the evaluation suite for claim coverage, citation accuracy, alert reproducibility, and explanation faithfulness.
+5. Add optional private connectors and organization knowledge boundaries.
+6. Add facility/emissions intelligence using public EPA data after the fundamentals workflow is mature.
 
 ## License
 
