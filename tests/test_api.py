@@ -1,7 +1,6 @@
 from pathlib import Path
 
 from fastapi.testclient import TestClient
-
 from oilsignal.api.app import create_app
 from oilsignal.data_ingestion.fixtures import FixtureIngestor
 

@@ -2,7 +2,6 @@ from datetime import date
 from pathlib import Path
 
 import pytest
-
 from oilsignal.agent.validation import ClaimValidationError, validate_report
 from oilsignal.data_ingestion.fixtures import FixtureIngestor, load_observations
 from oilsignal.models import Claim, ClaimKind, Report, ReportSection

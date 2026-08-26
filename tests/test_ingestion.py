@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import polars as pl
-
 from oilsignal.data_ingestion.fixtures import FixtureIngestor, load_observations
 from oilsignal.storage.metadata import get_ingestion_run
 
