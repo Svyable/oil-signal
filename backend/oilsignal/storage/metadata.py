@@ -25,6 +25,14 @@ class ReportRunRow(SQLModel, table=True):
     output_format: str
 
 
+class AlertStateRow(SQLModel, table=True):
+    policy_id: str = Field(primary_key=True)
+    active: bool = False
+    last_changed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    last_triggered_at: datetime | None = None
+    last_as_of: str | None = None
+
+
 def create_metadata_engine(path: Path) -> Engine:
     path.parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(f"sqlite:///{path}")
@@ -46,6 +54,19 @@ def save_ingestion_run(path: Path, row: IngestionRunRow) -> None:
 
 
 def save_report_run(path: Path, row: ReportRunRow) -> None:
+    engine = create_metadata_engine(path)
+    with Session(engine) as session:
+        session.merge(row)
+        session.commit()
+
+
+def get_alert_state(path: Path, policy_id: str) -> AlertStateRow | None:
+    engine = create_metadata_engine(path)
+    with Session(engine) as session:
+        return session.exec(select(AlertStateRow).where(AlertStateRow.policy_id == policy_id)).first()
+
+
+def save_alert_state(path: Path, row: AlertStateRow) -> None:
     engine = create_metadata_engine(path)
     with Session(engine) as session:
         session.merge(row)

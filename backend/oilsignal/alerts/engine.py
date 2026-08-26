@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, model_validator
 from oilsignal.alerts.rules import MetricField, Operator, ThresholdRule
 from oilsignal.analytics.petroleum import SeriesSnapshot, build_snapshot
 from oilsignal.models import Observation
+from oilsignal.storage.metadata import AlertStateRow, get_alert_state, save_alert_state
 
 
 class MatchMode(StrEnum):
@@ -107,6 +108,19 @@ class AlertEvaluationResult(BaseModel):
     triggered: list[PolicyEvaluation]
 
 
+class PolicyStateTransition(BaseModel):
+    policy_id: str
+    previous_active: bool
+    active: bool
+    notify: bool
+    recovered: bool
+
+
+class StatefulAlertEvaluationResult(AlertEvaluationResult):
+    notifications: list[PolicyEvaluation]
+    transitions: list[PolicyStateTransition]
+
+
 def evaluate_policies(
     observations: list[Observation],
     policy_set: AlertPolicySet,
@@ -127,4 +141,64 @@ def evaluate_policies(
     return AlertEvaluationResult(
         evaluations=evaluations,
         triggered=[evaluation for evaluation in evaluations if evaluation.matched],
+    )
+
+
+def evaluate_policies_with_state(
+    observations: list[Observation],
+    policy_set: AlertPolicySet,
+    metadata_path: Path,
+) -> StatefulAlertEvaluationResult:
+    """Evaluate policies and emit notifications only on inactive -> active transitions."""
+
+    result = evaluate_policies(observations, policy_set)
+    notifications: list[PolicyEvaluation] = []
+    transitions: list[PolicyStateTransition] = []
+
+    for evaluation in result.evaluations:
+        existing = get_alert_state(metadata_path, evaluation.policy_id)
+        previous_active = existing.active if existing else False
+        notify = evaluation.matched and not previous_active
+        recovered = previous_active and not evaluation.matched
+        if notify:
+            notifications.append(evaluation)
+
+        changed_at = (
+            result.evaluated_at
+            if existing is None or previous_active != evaluation.matched
+            else existing.last_changed_at
+        )
+        last_triggered_at = (
+            result.evaluated_at
+            if notify
+            else existing.last_triggered_at
+            if existing
+            else None
+        )
+        save_alert_state(
+            metadata_path,
+            AlertStateRow(
+                policy_id=evaluation.policy_id,
+                active=evaluation.matched,
+                last_changed_at=changed_at,
+                last_triggered_at=last_triggered_at,
+                last_as_of=evaluation.as_of.isoformat() if evaluation.as_of else None,
+            ),
+        )
+        transitions.append(
+            PolicyStateTransition(
+                policy_id=evaluation.policy_id,
+                previous_active=previous_active,
+                active=evaluation.matched,
+                notify=notify,
+                recovered=recovered,
+            )
+        )
+
+    return StatefulAlertEvaluationResult(
+        evaluated_at=result.evaluated_at,
+        evaluations=result.evaluations,
+        triggered=result.triggered,
+        notifications=notifications,
+        transitions=transitions,
     )

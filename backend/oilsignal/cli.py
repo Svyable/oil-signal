@@ -6,7 +6,11 @@ import json
 from pathlib import Path
 from typing import Any
 
-from oilsignal.alerts.engine import AlertPolicySet, evaluate_policies
+from oilsignal.alerts.engine import (
+    AlertPolicySet,
+    evaluate_policies,
+    evaluate_policies_with_state,
+)
 from oilsignal.config import settings
 from oilsignal.data_ingestion.eia import EIAClient
 from oilsignal.data_ingestion.live import EIAIngestor
@@ -44,6 +48,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     alerts.add_argument("--rules", type=Path, required=True)
     alerts.add_argument("--data-dir", type=Path, default=settings.data_dir)
+    alerts.add_argument(
+        "--stateless",
+        action="store_true",
+        help="dry-run every matching policy instead of edge-triggered notification state",
+    )
     return parser
 
 
@@ -56,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "report":
         return _report(args.type, args.format, args.data_dir)
     if args.command == "alerts-evaluate":
-        return _alerts_evaluate(args.rules, args.data_dir)
+        return _alerts_evaluate(args.rules, args.data_dir, args.stateless)
     raise RuntimeError(f"unhandled command: {args.command}")
 
 
@@ -86,9 +95,17 @@ def _report(report_type: str, output_format: str, data_dir: Path) -> int:
     return 0
 
 
-def _alerts_evaluate(rules_path: Path, data_dir: Path) -> int:
+def _alerts_evaluate(rules_path: Path, data_dir: Path, stateless: bool) -> int:
     policy_set = AlertPolicySet.load(rules_path)
-    result = evaluate_policies(load_latest_observations(data_dir), policy_set)
+    observations = load_latest_observations(data_dir)
+    if stateless:
+        result = evaluate_policies(observations, policy_set)
+    else:
+        result = evaluate_policies_with_state(
+            observations,
+            policy_set,
+            data_dir / "metadata.sqlite",
+        )
     print(result.model_dump_json(indent=2))
     return 0
 

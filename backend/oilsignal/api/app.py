@@ -6,7 +6,13 @@ from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from oilsignal.alerts.engine import AlertEvaluationResult, AlertPolicySet, evaluate_policies
+from oilsignal.alerts.engine import (
+    AlertEvaluationResult,
+    AlertPolicySet,
+    StatefulAlertEvaluationResult,
+    evaluate_policies,
+    evaluate_policies_with_state,
+)
 from oilsignal.analytics.petroleum import build_snapshot
 from oilsignal.config import settings
 from oilsignal.models import Citation, Observation, Report
@@ -158,6 +164,17 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     def alert_evaluation(policy_set: AlertPolicySet) -> AlertEvaluationResult:
         try:
             return evaluate_policies(load_latest_observations(app.state.data_dir), policy_set)
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/alerts/evaluate/stateful", response_model=StatefulAlertEvaluationResult)
+    def stateful_alert_evaluation(policy_set: AlertPolicySet) -> StatefulAlertEvaluationResult:
+        try:
+            return evaluate_policies_with_state(
+                load_latest_observations(app.state.data_dir),
+                policy_set,
+                app.state.data_dir / "metadata.sqlite",
+            )
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
