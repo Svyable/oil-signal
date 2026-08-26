@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import polars as pl
-from pydantic import BaseModel
+from pydantic import BaseModel, HttpUrl
 
 from oilsignal.data_ingestion.eia import EIASeriesRequest
 from oilsignal.data_ingestion.registry import SeriesRegistry, SeriesSpec
@@ -73,7 +73,7 @@ class EIAIngestor:
                 reused=True,
             )
 
-        records: list[dict[str, object]] = []
+        records: list[dict[str, Any]] = []
         seen: set[tuple[str, date]] = set()
         rows_skipped = 0
 
@@ -126,7 +126,7 @@ class EIAIngestor:
                     unit=spec.unit,
                     observation_date=observation_date,
                     value=value,
-                    source_url=self.client.public_data_url(spec.request),
+                    source_url=HttpUrl(self.client.public_data_url(spec.request)),
                     fetched_at=started,
                     raw_hash=digest,
                 )
@@ -169,9 +169,11 @@ class EIAIngestor:
 def _parse_total(value: object, fallback: int) -> int:
     if value is None:
         return fallback
+    if not isinstance(value, (str, int)):
+        raise ValueError(f"invalid EIA response total: {value!r}")
     try:
         return int(value)
-    except (TypeError, ValueError) as exc:
+    except ValueError as exc:
         raise ValueError(f"invalid EIA response total: {value!r}") from exc
 
 
