@@ -1,11 +1,23 @@
 {
-  "note": "Illustrative route configuration only. Confirm current EIA v2 routes/facets before production use.",
+  "version": 1,
+  "note": "Schema-complete example. Use `oilsignal eia-metadata --route petroleum/sum/sndw` to inspect the current EIA route and add facets that resolve each canonical series to one row per period before live ingestion.",
   "series": [
-    {"name": "us_crude_stocks", "route": "petroleum/<route>", "frequency": "weekly", "data": ["value"], "facets": {"series": ["<EIA_SERIES_ID>"]}},
-    {"name": "us_gasoline_stocks", "route": "petroleum/<route>", "frequency": "weekly", "data": ["value"], "facets": {"series": ["<EIA_SERIES_ID>"]}},
-    {"name": "padd2_distillate_stocks", "route": "petroleum/<route>", "frequency": "weekly", "data": ["value"], "facets": {"series": ["<EIA_SERIES_ID>"]}},
-    {"name": "us_jet_fuel_stocks", "route": "petroleum/<route>", "frequency": "weekly", "data": ["value"], "facets": {"series": ["<EIA_SERIES_ID>"]}},
-    {"name": "us_refinery_utilization", "route": "petroleum/<route>", "frequency": "weekly", "data": ["value"], "facets": {"series": ["<EIA_SERIES_ID>"]}},
-    {"name": "us_petroleum_imports", "route": "petroleum/<route>", "frequency": "weekly", "data": ["value"], "facets": {"series": ["<EIA_SERIES_ID>"]}}
+    {
+      "canonical_series_id": "example.us_total_petroleum_stocks",
+      "metric": "inventory",
+      "product": "total petroleum",
+      "geography": "US",
+      "unit": "thousand barrels",
+      "period_field": "period",
+      "value_field": "value",
+      "request": {
+        "route": "petroleum/sum/sndw",
+        "frequency": "weekly",
+        "data": ["value"],
+        "facets": {},
+        "start": "2025-01-01",
+        "length": 5000
+      }
+    }
   ]
 }

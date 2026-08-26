@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "oilsignal"
-version = "0.1.0"
+version = "0.2.0"
 description = "Evidence-first oil-market intelligence for U.S. petroleum fundamentals"
 readme = {text = "OilSignal backend package", content-type = "text/markdown"}
 requires-python = ">=3.12"
@@ -30,6 +30,9 @@ dev = [
   "pytest-cov>=5,<7",
   "ruff>=0.6,<1",
 ]
+
+[project.scripts]
+oilsignal = "oilsignal.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["oilsignal"]
