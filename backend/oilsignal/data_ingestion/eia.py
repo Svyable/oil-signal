@@ -41,7 +41,10 @@ class EIAClient:
         params.extend([("sort[0][column]", "period"), ("sort[0][direction]", "desc")])
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(f"{self.base_url}/{request.route.strip('/')}/data/", params=params)
+            response = await client.get(
+                f"{self.base_url}/{request.route.strip('/')}/data/",
+                params=httpx.QueryParams(params),
+            )
             response.raise_for_status()
             payload = response.json()
         if "response" not in payload:
