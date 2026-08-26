@@ -1,7 +1,9 @@
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
-from sqlmodel import Field, Session, SQLModel, create_engine
+from sqlalchemy.engine import Engine
+from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 
 class IngestionRunRow(SQLModel, table=True):
@@ -23,15 +25,32 @@ class ReportRunRow(SQLModel, table=True):
     output_format: str
 
 
-def create_metadata_engine(path: Path):  # type: ignore[no-untyped-def]
+def create_metadata_engine(path: Path) -> Engine:
     path.parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(f"sqlite:///{path}")
     SQLModel.metadata.create_all(engine)
     return engine
 
 
+def get_ingestion_run(path: Path, run_id: str) -> IngestionRunRow | None:
+    engine = create_metadata_engine(path)
+    with Session(engine) as session:
+        return session.exec(select(IngestionRunRow).where(IngestionRunRow.id == run_id)).first()
+
+
 def save_ingestion_run(path: Path, row: IngestionRunRow) -> None:
     engine = create_metadata_engine(path)
     with Session(engine) as session:
-        session.add(row)
+        session.merge(row)
         session.commit()
+
+
+def save_report_run(path: Path, row: ReportRunRow) -> None:
+    engine = create_metadata_engine(path)
+    with Session(engine) as session:
+        session.merge(row)
+        session.commit()
+
+
+def row_to_dict(row: SQLModel) -> dict[str, Any]:
+    return row.model_dump()
