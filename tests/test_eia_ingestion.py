@@ -4,7 +4,6 @@ from typing import Any
 
 import httpx
 import pytest
-
 from oilsignal.data_ingestion.eia import EIAClient, EIASeriesRequest
 from oilsignal.data_ingestion.fixtures import load_observations
 from oilsignal.data_ingestion.live import EIAIngestor

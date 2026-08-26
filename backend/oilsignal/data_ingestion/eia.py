@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, TypeAlias
+from typing import Any
 
 import httpx
 from pydantic import BaseModel, Field
 
-QueryScalar: TypeAlias = str | int | float | bool | None
+type QueryScalar = str | int | float | bool | None
 
 
 class EIASeriesRequest(BaseModel):

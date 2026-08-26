@@ -1,7 +1,6 @@
 from pathlib import Path
 
 from fastapi.testclient import TestClient
-
 from oilsignal.alerts.engine import AlertPolicy, AlertPolicySet, MatchMode, evaluate_policies
 from oilsignal.alerts.rules import MetricField, Operator, ThresholdRule
 from oilsignal.api.app import create_app
