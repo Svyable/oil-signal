@@ -1,19 +1,11 @@
 {
   "note": "Illustrative route configuration only. Confirm current EIA v2 routes/facets before production use.",
   "series": [
-    {
-      "name": "us_crude_stocks",
-      "route": "petroleum/<route>",
-      "frequency": "weekly",
-      "data": ["value"],
-      "facets": {"series": ["<EIA_SERIES_ID>"]}
-    },
-    {
-      "name": "padd2_distillate_stocks",
-      "route": "petroleum/<route>",
-      "frequency": "weekly",
-      "data": ["value"],
-      "facets": {"series": ["<EIA_SERIES_ID>"]}
-    }
+    {"name": "us_crude_stocks", "route": "petroleum/<route>", "frequency": "weekly", "data": ["value"], "facets": {"series": ["<EIA_SERIES_ID>"]}},
+    {"name": "us_gasoline_stocks", "route": "petroleum/<route>", "frequency": "weekly", "data": ["value"], "facets": {"series": ["<EIA_SERIES_ID>"]}},
+    {"name": "padd2_distillate_stocks", "route": "petroleum/<route>", "frequency": "weekly", "data": ["value"], "facets": {"series": ["<EIA_SERIES_ID>"]}},
+    {"name": "us_jet_fuel_stocks", "route": "petroleum/<route>", "frequency": "weekly", "data": ["value"], "facets": {"series": ["<EIA_SERIES_ID>"]}},
+    {"name": "us_refinery_utilization", "route": "petroleum/<route>", "frequency": "weekly", "data": ["value"], "facets": {"series": ["<EIA_SERIES_ID>"]}},
+    {"name": "us_petroleum_imports", "route": "petroleum/<route>", "frequency": "weekly", "data": ["value"], "facets": {"series": ["<EIA_SERIES_ID>"]}}
   ]
 }

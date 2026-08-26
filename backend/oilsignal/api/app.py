@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -11,6 +11,7 @@ from oilsignal.config import settings
 from oilsignal.data_ingestion.fixtures import load_observations
 from oilsignal.models import Citation, Observation, Report
 from oilsignal.reports.renderers import render_report
+from oilsignal.reports.specialized import DistillateSupplyRiskBrief, RefineryUtilizationWatch
 from oilsignal.reports.weekly import WeeklyPetroleumBrief
 
 
@@ -106,15 +107,28 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     @app.get("/api/reports/weekly", response_model=Report)
     def weekly_report() -> Report:
         try:
-            observations = _load_latest(app.state.data_dir)
-            return WeeklyPetroleumBrief().build(observations)
+            return WeeklyPetroleumBrief().build(_load_latest(app.state.data_dir))
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/api/reports/distillate", response_model=Report)
+    def distillate_report() -> Report:
+        try:
+            return DistillateSupplyRiskBrief().build(_load_latest(app.state.data_dir))
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/api/reports/refinery-utilization", response_model=Report)
+    def refinery_report() -> Report:
+        try:
+            return RefineryUtilizationWatch().build(_load_latest(app.state.data_dir))
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/api/reports/weekly/render", response_model=RenderedReport)
-    def weekly_report_render(
-        format: str = Query(default="markdown", pattern="^(markdown|md|html|json)$"),
-    ) -> RenderedReport:
+    def weekly_report_render(format: str = "markdown") -> RenderedReport:
+        if format not in {"markdown", "md", "html", "json"}:
+            raise HTTPException(status_code=422, detail=f"unsupported report format: {format}")
         try:
             report = WeeklyPetroleumBrief().build(_load_latest(app.state.data_dir))
             return RenderedReport(format=format, content=render_report(report, format))
