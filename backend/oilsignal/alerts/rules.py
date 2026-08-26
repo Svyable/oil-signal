@@ -30,7 +30,7 @@ class ThresholdRule(BaseModel):
     threshold: float
     message: str
 
-    def evaluate(self, snapshot: SeriesSnapshot) -> "AlertEvent | None":
+    def evaluate(self, snapshot: SeriesSnapshot) -> AlertEvent | None:
         value = _read_field(snapshot, self.field)
         if value is None or not _compare(value, self.operator, self.threshold):
             return None

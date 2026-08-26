@@ -1,7 +1,13 @@
 from datetime import date
 
-from oilsignal.models import CalculationTrace, Citation, Claim, ClaimKind, Frequency, Observation
-
+from oilsignal.models import (
+    CalculationTrace,
+    Citation,
+    Claim,
+    ClaimKind,
+    Frequency,
+    Observation,
+)
 
 SOURCE = "https://api.eia.gov/v2/petroleum/example"
 

@@ -7,9 +7,11 @@ from oilsignal.agent.validation import ClaimValidationError, validate_report
 from oilsignal.data_ingestion.fixtures import FixtureIngestor, load_observations
 from oilsignal.models import Claim, ClaimKind, Report, ReportSection
 from oilsignal.reports.renderers import render_report
-from oilsignal.reports.specialized import DistillateSupplyRiskBrief, RefineryUtilizationWatch
+from oilsignal.reports.specialized import (
+    DistillateSupplyRiskBrief,
+    RefineryUtilizationWatch,
+)
 from oilsignal.reports.weekly import WeeklyPetroleumBrief
-
 
 FIXTURE = Path(__file__).parent / "fixtures" / "petroleum_weekly.csv"
 

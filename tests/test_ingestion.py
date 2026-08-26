@@ -5,7 +5,6 @@ import polars as pl
 from oilsignal.data_ingestion.fixtures import FixtureIngestor, load_observations
 from oilsignal.storage.metadata import get_ingestion_run
 
-
 FIXTURE = Path(__file__).parent / "fixtures" / "petroleum_weekly.csv"
 
 

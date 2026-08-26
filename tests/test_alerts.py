@@ -4,7 +4,6 @@ from oilsignal.alerts.rules import MetricField, Operator, ThresholdRule
 from oilsignal.analytics.petroleum import build_snapshot
 from oilsignal.data_ingestion.fixtures import FixtureIngestor, load_observations
 
-
 FIXTURE = Path(__file__).parent / "fixtures" / "petroleum_weekly.csv"
 
 

@@ -4,7 +4,6 @@ import re
 
 from oilsignal.models import Claim, Report
 
-
 NUMERIC_PATTERN = re.compile(r"(?<![A-Za-z])[-+]?\d[\d,]*(?:\.\d+)?%?")
 
 

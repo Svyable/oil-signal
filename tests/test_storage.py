@@ -3,7 +3,6 @@ from pathlib import Path
 from oilsignal.data_ingestion.fixtures import FixtureIngestor
 from oilsignal.storage.catalog import ObservationCatalog
 
-
 FIXTURE = Path(__file__).parent / "fixtures" / "petroleum_weekly.csv"
 
 

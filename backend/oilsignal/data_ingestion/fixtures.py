@@ -10,7 +10,6 @@ from pydantic import BaseModel
 from oilsignal.models import Observation
 from oilsignal.storage.metadata import IngestionRunRow, get_ingestion_run, save_ingestion_run
 
-
 REQUIRED_COLUMNS = {
     "series_id",
     "metric",
