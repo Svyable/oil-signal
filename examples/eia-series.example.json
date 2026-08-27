@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "verified_at": "2026-08-26",
   "note": "Verified public EIA weekly petroleum mappings as of 2026-08-26. Uses EIA API v2's documented /seriesid/ compatibility route so each request resolves one legacy weekly series without ambiguous facets.",
   "series": [
     {
@@ -10,6 +11,7 @@
       "unit": "thousand barrels",
       "period_field": "period",
       "value_field": "value",
+      "release_family": "wpsr",
       "request": {
         "route": "seriesid/PET.WCESTUS1.W",
         "frequency": "weekly",
@@ -26,6 +28,7 @@
       "unit": "thousand barrels",
       "period_field": "period",
       "value_field": "value",
+      "release_family": "wpsr",
       "request": {
         "route": "seriesid/PET.WGTSTUS1.W",
         "frequency": "weekly",
@@ -42,6 +45,7 @@
       "unit": "thousand barrels",
       "period_field": "period",
       "value_field": "value",
+      "release_family": "wpsr",
       "request": {
         "route": "seriesid/PET.WDISTUS1.W",
         "frequency": "weekly",
@@ -58,6 +62,7 @@
       "unit": "thousand barrels",
       "period_field": "period",
       "value_field": "value",
+      "release_family": "wpsr",
       "request": {
         "route": "seriesid/PET.WDISTP21.W",
         "frequency": "weekly",
@@ -74,6 +79,7 @@
       "unit": "thousand barrels",
       "period_field": "period",
       "value_field": "value",
+      "release_family": "wpsr",
       "request": {
         "route": "seriesid/PET.WKJSTUS1.W",
         "frequency": "weekly",
@@ -90,6 +96,7 @@
       "unit": "percent",
       "period_field": "period",
       "value_field": "value",
+      "release_family": "wpsr",
       "request": {
         "route": "seriesid/PET.WPULEUS3.W",
         "frequency": "weekly",
@@ -106,6 +113,7 @@
       "unit": "thousand barrels per day",
       "period_field": "period",
       "value_field": "value",
+      "release_family": "wpsr",
       "request": {
         "route": "seriesid/PET.WCRIMUS2.W",
         "frequency": "weekly",

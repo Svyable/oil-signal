@@ -17,6 +17,7 @@ from oilsignal.config import settings
 from oilsignal.data_ingestion.eia import EIAClient
 from oilsignal.data_ingestion.live import EIAIngestor
 from oilsignal.data_ingestion.registry import SeriesRegistry
+from oilsignal.data_ingestion.verification import verify_eia_registry
 from oilsignal.freshness import FreshnessState, check_wpsr_freshness, require_fresh_wpsr
 from oilsignal.reports.renderers import render_report
 from oilsignal.reports.specialized import DistillateSupplyRiskBrief, RefineryUtilizationWatch
@@ -36,6 +37,18 @@ def build_parser() -> argparse.ArgumentParser:
     metadata = subparsers.add_parser("eia-metadata", help="inspect EIA route metadata or facets")
     metadata.add_argument("--route", required=True)
     metadata.add_argument("--facet")
+
+    verify = subparsers.add_parser(
+        "eia-verify-registry",
+        help="probe every EIA registry route and verify its current source contract",
+    )
+    verify.add_argument("--registry", type=Path, required=True)
+    verify.add_argument("--sample-length", type=int, default=2)
+    verify.add_argument(
+        "--skip-freshness",
+        action="store_true",
+        help="verify route/data shape without checking WPSR recency",
+    )
 
     freshness = subparsers.add_parser(
         "freshness",
@@ -99,6 +112,10 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_ingest_eia(args.registry, args.data_dir))
     if args.command == "eia-metadata":
         return asyncio.run(_eia_metadata(args.route, args.facet))
+    if args.command == "eia-verify-registry":
+        return asyncio.run(
+            _eia_verify_registry(args.registry, args.sample_length, args.skip_freshness)
+        )
     if args.command == "freshness":
         return _freshness(args.data_dir)
     if args.command == "report":
@@ -136,6 +153,21 @@ async def _eia_metadata(route: str, facet: str | None) -> int:
     payload = await client.facet_values(route, facet) if facet else await client.metadata(route)
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
+
+
+async def _eia_verify_registry(
+    registry_path: Path,
+    sample_length: int,
+    skip_freshness: bool,
+) -> int:
+    result = await verify_eia_registry(
+        SeriesRegistry.load(registry_path),
+        _eia_client(),
+        sample_length=sample_length,
+        enforce_freshness=not skip_freshness,
+    )
+    print(result.model_dump_json(indent=2))
+    return 0 if result.ok else 2
 
 
 def _freshness(data_dir: Path) -> int:
