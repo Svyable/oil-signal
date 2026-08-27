@@ -1,8 +1,8 @@
-# EIA API setup
+# EIA API setup and maintained registry verification
 
-OilSignal keeps EIA route selection data-driven. The EIA API is self-describing, and route/facet definitions can change, so market-series mappings live in a registry rather than being buried inside analytics code.
+OilSignal keeps EIA route selection data-driven. EIA route/facet definitions can change, so source mappings live in a registry rather than being buried inside analytics code.
 
-The repository includes a core weekly petroleum registry in `examples/eia-series.example.json`, last verified against EIA public documentation/series pages on **2026-08-26**. It uses EIA API v2's documented `/seriesid/<legacy-series-id>` compatibility route to resolve one legacy weekly series per canonical OilSignal ID without ambiguous facets.
+The repository includes a maintained weekly petroleum registry at `examples/eia-series.example.json`, with explicit `verified_at` metadata. It uses EIA API v2's documented `/seriesid/<legacy-series-id>` compatibility route to resolve one legacy weekly series per canonical OilSignal ID without ambiguous facets.
 
 EIA API v2 documentation: https://www.eia.gov/opendata/documentation.php
 
@@ -16,13 +16,9 @@ export OILSIGNAL_EIA_API_KEY=your-key
 
 Tests, fixture ingestion, and deterministic reports over already-ingested data do not require a key.
 
-## 2. Ingest the verified core registry
+## 2. Maintained core registry
 
-```bash
-oilsignal ingest-eia --registry examples/eia-series.example.json --data-dir ./data
-```
-
-The current core mappings are:
+The current registry includes inventory, refinery/import, and product-supplied demand-proxy series:
 
 | OilSignal canonical ID | EIA legacy weekly series | Meaning |
 | --- | --- | --- |
@@ -33,10 +29,53 @@ The current core mappings are:
 | `PET.JETUS.W` | `PET.WKJSTUS1.W` | U.S. kerosene-type jet fuel stocks |
 | `PET.UTILUS.W` | `PET.WPULEUS3.W` | U.S. refinery utilization |
 | `PET.CRIMUS.W` | `PET.WCRIMUS2.W` | U.S. crude oil imports |
+| `PET.GASPSUS.W` | `PET.WGFUPUS2.W` | U.S. finished motor gasoline product supplied |
+| `PET.DISTPSUS.W` | `PET.WDIUPUS2.W` | U.S. distillate fuel oil product supplied |
+| `PET.JETPSUS.W` | `PET.WKJUPUS2.W` | U.S. kerosene-type jet fuel product supplied |
+| `PET.TOTALPSUS.W` | `PET.WRPUPUS2.W` | U.S. petroleum products supplied |
 
-Canonical IDs are OilSignal's stable internal contract. EIA route identifiers remain registry data so they can be re-verified or replaced without rewriting report logic.
+Canonical IDs are OilSignal's stable internal contract. EIA identifiers remain registry data so they can be re-verified or replaced without rewriting analytics/report logic.
 
-## 3. Discover or re-verify routes
+## 3. Verify the live source contract
+
+Before relying on maintained mappings, probe them directly:
+
+```bash
+oilsignal eia-verify-registry --registry examples/eia-series.example.json
+```
+
+The verifier checks every configured route independently and reports all failures rather than stopping at the first one. It validates:
+
+- the route returns a response/data list;
+- sampled periods parse at the declared frequency and are not duplicated;
+- sampled values are present and numeric;
+- any returned response frequency matches the registry;
+- API version and warning metadata are captured for audit;
+- series tagged `release_family: wpsr` cover the currently expected WPSR week.
+
+For a route/shape audit during an EIA publication delay, omit the recency requirement:
+
+```bash
+oilsignal eia-verify-registry \
+  --registry examples/eia-series.example.json \
+  --skip-freshness
+```
+
+The command exits `0` only when every series passes and `2` when any source contract fails.
+
+The repository also includes `.github/workflows/eia-registry-verify.yml`, scheduled Friday at 18:00 UTC and manually dispatchable. Set repository secret `EIA_API_KEY` to activate its live probe. Without the secret, the job emits a notice and skips network verification rather than pretending a live check occurred.
+
+## 4. Ingest the verified registry
+
+```bash
+oilsignal ingest-eia --registry examples/eia-series.example.json --data-dir ./data
+```
+
+Each live run stores raw EIA JSON per configured series, SHA-256 source hashes on normalized observations, Parquet output, SQLModel ingestion-run metadata with `source = eia:v2`, and citation URLs that do not expose the API key.
+
+If the same registry and source payloads are seen again, the normalized dataset is reused deterministically.
+
+## 5. Discover or add routes
 
 Inspect route metadata before adding a new production series:
 
@@ -44,44 +83,23 @@ Inspect route metadata before adding a new production series:
 oilsignal eia-metadata --route petroleum/sum/sndw
 ```
 
-If the route advertises a facet, inspect its allowed values:
+If a route advertises a facet, inspect its values:
 
 ```bash
 oilsignal eia-metadata --route petroleum/sum/sndw --facet <facet-id>
 ```
 
-EIA v2 limits JSON responses to 5,000 rows. OilSignal deliberately fails ingestion if `response.total` exceeds the returned row count; constrain dates and facets instead of silently accepting a truncated dataset.
+EIA v2 limits JSON responses to 5,000 rows. OilSignal fails ingestion if `response.total` exceeds the returned row count; constrain dates/facets rather than silently accepting truncated history.
 
-## 4. Build or extend a registry
+A custom `SeriesSpec` defines canonical ID, metric/product/geography/unit normalization, EIA route/frequency/data/facets, response period/value fields, and optional `release_family`. A spec must resolve to at most one row per canonical series and period. Duplicate periods fail closed as an under-constrained registry.
 
-Copy `examples/eia-series.example.json` and define one `SeriesSpec` per canonical OilSignal series. Each spec provides:
-
-- a stable `canonical_series_id` used by analytics and citations;
-- metric, product, geography, and unit normalization;
-- the EIA route, frequency, requested data column, date bounds, and facets;
-- the response fields containing the observation period and numeric value.
-
-A spec must resolve to at most one observation per canonical series and period. If EIA returns duplicate periods, OilSignal rejects the run as under-constrained rather than guessing which facet row is correct.
-
-## 5. Provenance written by ingestion
-
-Each live run stores:
-
-- raw EIA JSON per configured series;
-- SHA-256 hashes of those raw payloads on every normalized observation;
-- normalized Parquet data;
-- SQLModel ingestion-run metadata with `source = eia:v2`;
-- citation URLs that identify the public EIA dataset route without exposing the API key.
-
-If the same registry and source payloads are seen again, the normalized dataset is reused deterministically.
-
-## 6. Check freshness before publishing intelligence
+## 6. Check ingested-data freshness
 
 ```bash
 oilsignal freshness --data-dir ./data
 ```
 
-For live `eia:v2` ingestion runs, OilSignal compares weekly observations with EIA's WPSR release schedule and waits through EIA's documented two-hour API availability grace window. Once a new week is expected, a lagging live series makes readiness/report/Q&A/alert paths fail closed until current data arrives.
+For live `eia:v2` ingestion runs, OilSignal compares weekly observations with the WPSR release schedule and waits through EIA's documented two-hour API availability grace window. Once a new week is expected, a lagging live series makes readiness/report/Q&A/alert paths fail closed until current data arrives.
 
 The offline fixture has different ingestion provenance and is intentionally exempt from the live release gate. See `docs/freshness.md` for timing and holiday behavior.
 
@@ -91,4 +109,4 @@ The offline fixture has different ingestion provenance and is intentionally exem
 oilsignal report --type weekly --format markdown --data-dir ./data
 ```
 
-Live data uses the same `Observation`, calculation trace, claim validator, and report code paths as the offline fixtures; the difference is that live evidence must also pass the release-aware freshness contract.
+The Weekly Petroleum Brief opportunistically includes maintained inventory, imports, refinery utilization, and product-supplied signals when available. The Distillate Supply Risk Brief adds U.S. distillate product supplied as a demand-pressure section when that series is present. Every numeric claim remains cited through the same validator/calculation path.

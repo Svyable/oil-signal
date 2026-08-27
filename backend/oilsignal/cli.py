@@ -3,10 +3,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from oilsignal.alerts.delivery import ConsoleOutboxDelivery, flush_alert_outbox
+from oilsignal.alerts.delivery import ConsoleOutboxDelivery, DeliveryPolicy, flush_alert_outbox
 from oilsignal.alerts.engine import (
     AlertPolicySet,
     evaluate_policies,
@@ -16,11 +17,13 @@ from oilsignal.config import settings
 from oilsignal.data_ingestion.eia import EIAClient
 from oilsignal.data_ingestion.live import EIAIngestor
 from oilsignal.data_ingestion.registry import SeriesRegistry
+from oilsignal.data_ingestion.verification import verify_eia_registry
 from oilsignal.freshness import FreshnessState, check_wpsr_freshness, require_fresh_wpsr
 from oilsignal.reports.renderers import render_report
 from oilsignal.reports.specialized import DistillateSupplyRiskBrief, RefineryUtilizationWatch
 from oilsignal.reports.weekly import WeeklyPetroleumBrief
 from oilsignal.storage.datasets import inspect_data, load_latest_observations
+from oilsignal.storage.metadata import list_alert_dead_letters, requeue_alert_dead_letter
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -34,6 +37,18 @@ def build_parser() -> argparse.ArgumentParser:
     metadata = subparsers.add_parser("eia-metadata", help="inspect EIA route metadata or facets")
     metadata.add_argument("--route", required=True)
     metadata.add_argument("--facet")
+
+    verify = subparsers.add_parser(
+        "eia-verify-registry",
+        help="probe every EIA registry route and verify its current source contract",
+    )
+    verify.add_argument("--registry", type=Path, required=True)
+    verify.add_argument("--sample-length", type=int, default=2)
+    verify.add_argument(
+        "--skip-freshness",
+        action="store_true",
+        help="verify route/data shape without checking WPSR recency",
+    )
 
     freshness = subparsers.add_parser(
         "freshness",
@@ -64,11 +79,30 @@ def build_parser() -> argparse.ArgumentParser:
 
     deliver = subparsers.add_parser(
         "alerts-deliver",
-        help="deliver pending alert outbox rows with retry receipts",
+        help="drain eligible alert rows with leases, backoff, and dead-lettering",
     )
     deliver.add_argument("--adapter", choices=["console"], default="console")
     deliver.add_argument("--data-dir", type=Path, default=settings.data_dir)
     deliver.add_argument("--limit", type=int, default=100)
+    deliver.add_argument("--worker-id")
+    deliver.add_argument("--lease-seconds", type=int, default=120)
+    deliver.add_argument("--max-attempts", type=int, default=5)
+    deliver.add_argument("--base-backoff-seconds", type=int, default=30)
+    deliver.add_argument("--max-backoff-seconds", type=int, default=3600)
+
+    dead_letters = subparsers.add_parser(
+        "alerts-dead-letters",
+        help="list active alert dead letters",
+    )
+    dead_letters.add_argument("--data-dir", type=Path, default=settings.data_dir)
+    dead_letters.add_argument("--limit", type=int, default=100)
+
+    requeue = subparsers.add_parser(
+        "alerts-requeue",
+        help="requeue a dead-lettered alert with a fresh attempt budget",
+    )
+    requeue.add_argument("--outbox-id", required=True)
+    requeue.add_argument("--data-dir", type=Path, default=settings.data_dir)
     return parser
 
 
@@ -78,6 +112,10 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_ingest_eia(args.registry, args.data_dir))
     if args.command == "eia-metadata":
         return asyncio.run(_eia_metadata(args.route, args.facet))
+    if args.command == "eia-verify-registry":
+        return asyncio.run(
+            _eia_verify_registry(args.registry, args.sample_length, args.skip_freshness)
+        )
     if args.command == "freshness":
         return _freshness(args.data_dir)
     if args.command == "report":
@@ -85,7 +123,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "alerts-evaluate":
         return _alerts_evaluate(args.rules, args.data_dir, args.stateless)
     if args.command == "alerts-deliver":
-        return _alerts_deliver(args.adapter, args.data_dir, args.limit)
+        return _alerts_deliver(
+            args.adapter,
+            args.data_dir,
+            args.limit,
+            args.worker_id,
+            args.lease_seconds,
+            args.max_attempts,
+            args.base_backoff_seconds,
+            args.max_backoff_seconds,
+        )
+    if args.command == "alerts-dead-letters":
+        return _alerts_dead_letters(args.data_dir, args.limit)
+    if args.command == "alerts-requeue":
+        return _alerts_requeue(args.data_dir, args.outbox_id)
     raise RuntimeError(f"unhandled command: {args.command}")
 
 
@@ -102,6 +153,21 @@ async def _eia_metadata(route: str, facet: str | None) -> int:
     payload = await client.facet_values(route, facet) if facet else await client.metadata(route)
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
+
+
+async def _eia_verify_registry(
+    registry_path: Path,
+    sample_length: int,
+    skip_freshness: bool,
+) -> int:
+    result = await verify_eia_registry(
+        SeriesRegistry.load(registry_path),
+        _eia_client(),
+        sample_length=sample_length,
+        enforce_freshness=not skip_freshness,
+    )
+    print(result.model_dump_json(indent=2))
+    return 0 if result.ok else 2
 
 
 def _freshness(data_dir: Path) -> int:
@@ -143,16 +209,50 @@ def _alerts_evaluate(rules_path: Path, data_dir: Path, stateless: bool) -> int:
     return 0
 
 
-def _alerts_deliver(adapter_name: str, data_dir: Path, limit: int) -> int:
+def _alerts_deliver(
+    adapter_name: str,
+    data_dir: Path,
+    limit: int,
+    worker_id: str | None,
+    lease_seconds: int,
+    max_attempts: int,
+    base_backoff_seconds: int,
+    max_backoff_seconds: int,
+) -> int:
     if adapter_name != "console":
         raise ValueError(f"unsupported delivery adapter: {adapter_name}")
+    policy = DeliveryPolicy(
+        lease_seconds=lease_seconds,
+        max_attempts=max_attempts,
+        base_backoff_seconds=base_backoff_seconds,
+        max_backoff_seconds=max_backoff_seconds,
+    )
     receipts = flush_alert_outbox(
         data_dir / "metadata.sqlite",
         ConsoleOutboxDelivery(),
         limit=limit,
+        worker_id=worker_id,
+        policy=policy,
     )
     print(json.dumps([receipt.model_dump(mode="json") for receipt in receipts], indent=2))
-    return 1 if any(receipt.status == "failed" for receipt in receipts) else 0
+    bad_statuses = {"failed", "dead_letter", "lease_lost"}
+    return 1 if any(receipt.status in bad_statuses for receipt in receipts) else 0
+
+
+def _alerts_dead_letters(data_dir: Path, limit: int) -> int:
+    rows = list_alert_dead_letters(data_dir / "metadata.sqlite", limit=limit)
+    print(json.dumps([row.model_dump(mode="json") for row in rows], indent=2))
+    return 1 if rows else 0
+
+
+def _alerts_requeue(data_dir: Path, outbox_id: str) -> int:
+    row = requeue_alert_dead_letter(
+        data_dir / "metadata.sqlite",
+        outbox_id=outbox_id,
+        now=datetime.now(UTC),
+    )
+    print(json.dumps(row.model_dump(mode="json"), indent=2))
+    return 0
 
 
 def _eia_client() -> EIAClient:

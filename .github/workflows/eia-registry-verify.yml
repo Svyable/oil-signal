@@ -1,0 +1,25 @@
+name: eia-registry-verify
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 18 * * 5"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      OILSIGNAL_EIA_API_KEY: ${{ secrets.EIA_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ./backend
+      - name: Explain inactive live verification
+        if: env.OILSIGNAL_EIA_API_KEY == ''
+        run: echo "::notice::Set repository secret EIA_API_KEY to activate scheduled live registry verification."
+      - name: Probe maintained EIA registry
+        if: env.OILSIGNAL_EIA_API_KEY != ''
+        run: oilsignal eia-verify-registry --registry examples/eia-series.example.json

@@ -62,18 +62,36 @@ def _citation(row: Observation, calculation_id: str | None = None) -> Citation:
     )
 
 
-def _deterministic_answer(question: str, observations: list[Observation]) -> AskResponse:
+def _question_series(question: str) -> tuple[str, str]:
     normalized = question.lower()
-    if any(token in normalized for token in ("diesel", "distillate", "midwest", "padd 2")):
-        series_id = "PET.DISTP2.W"
-        label = "PADD 2 distillate stocks"
-    elif any(token in normalized for token in ("refinery", "utilization")):
-        series_id = "PET.UTILUS.W"
-        label = "U.S. refinery utilization"
-    else:
-        series_id = "PET.CRDUUS.W"
-        label = "U.S. crude oil stocks"
+    demand_intent = any(
+        token in normalized
+        for token in ("demand", "product supplied", "consumption", "consumed", "usage")
+    )
+    if demand_intent:
+        if any(token in normalized for token in ("gasoline", "motor gas", "gas demand")):
+            return "PET.GASPSUS.W", "U.S. finished motor gasoline product supplied"
+        if any(token in normalized for token in ("diesel", "distillate")):
+            return "PET.DISTPSUS.W", "U.S. distillate product supplied"
+        if any(token in normalized for token in ("jet", "aviation")):
+            return "PET.JETPSUS.W", "U.S. jet fuel product supplied"
+        return "PET.TOTALPSUS.W", "U.S. petroleum products supplied"
 
+    if any(token in normalized for token in ("diesel", "distillate", "midwest", "padd 2")):
+        return "PET.DISTP2.W", "PADD 2 distillate stocks"
+    if any(token in normalized for token in ("refinery", "utilization")):
+        return "PET.UTILUS.W", "U.S. refinery utilization"
+    if any(token in normalized for token in ("gasoline", "motor gas")):
+        return "PET.GASUS.W", "U.S. total gasoline stocks"
+    if any(token in normalized for token in ("jet", "aviation")):
+        return "PET.JETUS.W", "U.S. jet fuel stocks"
+    if any(token in normalized for token in ("import", "imports")):
+        return "PET.CRIMUS.W", "U.S. crude oil imports"
+    return "PET.CRDUUS.W", "U.S. crude oil stocks"
+
+
+def _deterministic_answer(question: str, observations: list[Observation]) -> AskResponse:
+    series_id, label = _question_series(question)
     rows = sorted(
         [row for row in observations if row.series_id == series_id],
         key=lambda row: row.observation_date,

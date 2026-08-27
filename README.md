@@ -21,6 +21,8 @@ flowchart LR
     GATE --> BRIEF[Briefs / composite alerts / Q&A]
     BRIEF --> UI[React dashboard]
     BRIEF --> OUTBOX[Transactional alert outbox]
+    OUTBOX --> LEASE[Worker lease + backoff]
+    LEASE --> ADAPTER[Delivery adapter / dead letter]
 ```
 
 A model can help explain evidence, but it is never the source of truth. OilSignal works without an LLM using deterministic report templates.
@@ -29,18 +31,20 @@ A model can help explain evidence, but it is never the source of truth. OilSigna
 
 - Typed petroleum observations with source URL, series ID, observation date, fetch time, and raw SHA-256.
 - Idempotent offline fixture ingestion and configurable live EIA v2 ingestion into Parquet with SQLModel run metadata.
-- A verified public weekly EIA registry for core crude, gasoline, distillate, PADD 2 distillate, jet fuel, refinery utilization, and crude-import series, last verified **2026-08-26**.
-- EIA route/facet discovery CLI for extending and re-verifying registry mappings.
-- Fail-closed live ingestion for truncated API responses, duplicate periods from under-constrained facets, invalid frequencies, and non-numeric values.
+- A maintained weekly EIA registry for crude, gasoline, distillate, PADD 2 distillate, jet fuel, refinery utilization, crude imports, and national gasoline/distillate/jet/total-product-supplied demand proxies.
+- Executable EIA registry verification that probes every configured route, validates sample shape/numeric data, captures API warnings/version, and optionally enforces WPSR recency.
+- A scheduled/manual GitHub workflow for live registry verification when repository secret `EIA_API_KEY` is configured.
+- EIA route/facet discovery CLI for extending and re-verifying mappings.
+- Fail-closed live ingestion for truncated responses, duplicate periods, invalid frequencies, and non-numeric values.
 - Release-calendar-aware WPSR freshness checks with a two-hour EIA API grace window and explicit holiday overrides.
 - Provenance-aware live/fixture discrimination so synthetic development data is never treated as a live WPSR feed.
 - Transparent week-over-week, four-week average, year-over-year, seasonal-range, and z-score calculations.
 - Structured `CalculationTrace`, `Citation`, `Claim`, and `Report` models.
 - Claim validator that rejects uncited market claims and unlinked calculation claims.
-- Weekly Petroleum Brief, Distillate Supply Risk Brief, and Refinery Utilization Watch in JSON, Markdown, and HTML.
+- Weekly Petroleum Brief, Distillate Supply Risk Brief, and Refinery Utilization Watch in JSON, Markdown, and HTML; live briefs opportunistically include the broader maintained fundamentals set.
 - Single-signal threshold rules plus composite `all`/`any` alert policies with per-condition audit traces.
 - Edge-triggered alert state with recovery/re-arm behavior and duplicate suppression.
-- Transactional alert outbox with at-least-once delivery, retry state, and delivery receipts.
+- Transactional alert outbox with at-least-once delivery, local multi-worker leases, bounded exponential backoff, dead-letter history, requeue, and delivery receipts.
 - FastAPI report, alert-evaluation, readiness, and cited Q&A endpoints.
 - React/Vite dashboard showing claims and the evidence table.
 - Optional OpenAI-compatible LLM client for local or hosted endpoints.
@@ -114,23 +118,26 @@ Tests and the synthetic demo do not require a key. For live connector use:
 export OILSIGNAL_EIA_API_KEY=your-key
 ```
 
-The included registry uses EIA API v2's documented `seriesid` compatibility route and was verified against EIA public series pages on **2026-08-26**:
+Verify the maintained source contract, ingest it, and check the resulting dataset:
 
 ```bash
+oilsignal eia-verify-registry --registry examples/eia-series.example.json
 oilsignal ingest-eia --registry examples/eia-series.example.json --data-dir ./data
 oilsignal freshness --data-dir ./data
 ```
 
-For extension or re-verification, inspect EIA routes and facets directly:
+For extension or debugging, inspect EIA routes/facets directly:
 
 ```bash
 oilsignal eia-metadata --route petroleum/sum/sndw
 oilsignal eia-metadata --route petroleum/sum/sndw --facet <facet-id>
 ```
 
-OilSignal retains raw JSON per configured series, hashes the source payload into each observation, and stores a public dataset URL without the API key. If EIA reports more rows than were returned, ingestion fails rather than accepting a silently truncated history.
+The verifier checks every route independently and returns a complete audit rather than hiding later failures behind the first broken series. `.github/workflows/eia-registry-verify.yml` can run the probe manually or on its Friday schedule when repository secret `EIA_API_KEY` is configured.
 
-For live EIA runs, report, Q&A, and alert paths fail closed when the latest weekly evidence trails the expected WPSR week after the configured publication time plus the two-hour API grace window. Synthetic fixture runs are explicitly excluded from this live freshness gate by ingestion provenance. See [`docs/eia-setup.md`](docs/eia-setup.md) and [`docs/freshness.md`](docs/freshness.md).
+OilSignal retains raw JSON per configured series, hashes source payloads into observations, and stores public dataset URLs without the API key. If EIA reports more rows than were returned, ingestion fails rather than accepting silently truncated history.
+
+For live EIA runs, report, Q&A, and alert paths fail closed when the latest weekly evidence trails the expected WPSR week after the configured publication time plus the two-hour API grace window. Synthetic fixture runs are explicitly excluded from the live freshness gate by ingestion provenance. See [`docs/eia-setup.md`](docs/eia-setup.md) and [`docs/freshness.md`](docs/freshness.md).
 
 ## API examples
 
@@ -156,63 +163,76 @@ curl -X POST http://localhost:8000/api/ask \
 
 The response contains both `answer` and structured `evidence` objects.
 
-## Composite alerts and delivery
+## Composite alerts and worker delivery
 
-Alert policies are data, not code. The included example requires both a low PADD 2 distillate inventory signal and soft refinery utilization:
+Alert policies are data, not code. The included example requires both low PADD 2 distillate inventory and soft refinery utilization:
 
 ```bash
 oilsignal alerts-evaluate --rules examples/alerts.example.json --data-dir ./data
 ```
 
-Stateful evaluation is the CLI default. An inactive-to-active transition updates alert state and enqueues a durable outbox row in the same SQLite transaction. A continuously true policy does not enqueue another notification until it first recovers and re-arms.
+Stateful evaluation atomically updates edge state and enqueues a durable outbox row on an inactive-to-active transition. A continuously true policy does not enqueue again until recovery/re-arm.
 
-Preview without mutating state or enqueueing:
+Preview without mutating state:
 
 ```bash
 oilsignal alerts-evaluate --rules examples/alerts.example.json --data-dir ./data --stateless
 ```
 
-Deliver pending rows through the community console adapter:
+Drain eligible rows with an explicit worker identity and retry policy:
 
 ```bash
-oilsignal alerts-deliver --adapter console --data-dir ./data
+oilsignal alerts-deliver \
+  --adapter console \
+  --data-dir ./data \
+  --worker-id worker-1 \
+  --lease-seconds 120 \
+  --max-attempts 5 \
+  --base-backoff-seconds 30 \
+  --max-backoff-seconds 3600
 ```
 
-Delivery is intentionally **at least once**: failed attempts remain retryable and every attempt records status, adapter, attempt count, timestamp, and error/delivery state. A crash after an external provider accepts a message but before OilSignal records success may produce a duplicate on retry, so production adapters should use provider idempotency keys when available. See [`docs/alert-state.md`](docs/alert-state.md).
+Claims use short expiring SQLite leases, so multiple local processes sharing one metadata database cannot actively own the same notification. Failed rows back off exponentially; exhausted rows become dead letters.
 
-`POST /api/alerts/evaluate` remains stateless for policy previews; `POST /api/alerts/evaluate/stateful` persists edge-trigger state and enqueues new notifications.
+```bash
+oilsignal alerts-dead-letters --data-dir ./data
+oilsignal alerts-requeue --outbox-id out_... --data-dir ./data
+```
+
+Delivery remains intentionally **at least once**. A crash after an external provider accepts a message but before local acknowledgement can still cause a retry, so production adapters should use provider idempotency based on `outbox_id`. See [`docs/alert-state.md`](docs/alert-state.md).
 
 ## Scheduling
 
-The CLI is intentionally cron-friendly. A typical self-hosted flow is ingest → verify freshness → evaluate/enqueue → deliver/retry → render:
+The CLI is cron-friendly. A typical self-hosted flow is verify source contract → ingest → verify dataset freshness → evaluate/enqueue → deliver/retry → render:
 
 ```bash
 # Wednesday after the normal WPSR/API grace window; adjust for your timezone/operations.
-45 12 * * 3 cd /srv/oil-signal && .venv/bin/oilsignal ingest-eia --registry examples/eia-series.example.json --data-dir data
-50 12 * * 3 cd /srv/oil-signal && .venv/bin/oilsignal freshness --data-dir data
-55 12 * * 3 cd /srv/oil-signal && .venv/bin/oilsignal alerts-evaluate --rules config/alerts.json --data-dir data
-0 13 * * 3 cd /srv/oil-signal && .venv/bin/oilsignal alerts-deliver --adapter console --data-dir data
-5 13 * * 3 cd /srv/oil-signal && .venv/bin/oilsignal report --type weekly --format markdown --data-dir data > /var/reports/oilsignal-weekly.md
+45 12 * * 3 cd /srv/oil-signal && .venv/bin/oilsignal eia-verify-registry --registry examples/eia-series.example.json
+50 12 * * 3 cd /srv/oil-signal && .venv/bin/oilsignal ingest-eia --registry examples/eia-series.example.json --data-dir data
+55 12 * * 3 cd /srv/oil-signal && .venv/bin/oilsignal freshness --data-dir data
+0 13 * * 3 cd /srv/oil-signal && .venv/bin/oilsignal alerts-evaluate --rules config/alerts.json --data-dir data
+5 13 * * 3 cd /srv/oil-signal && .venv/bin/oilsignal alerts-deliver --adapter console --data-dir data
+10 13 * * 3 cd /srv/oil-signal && .venv/bin/oilsignal report --type weekly --format markdown --data-dir data > /var/reports/oilsignal-weekly.md
 ```
 
-The release-aware freshness gate—not the example cron clock—is the source of truth. Holiday-delayed weeks will remain stale until the expected release has passed and current evidence arrives.
+The release-aware freshness gate—not the example clock—is the source of truth. Holiday-delayed weeks remain stale until the expected release and current evidence arrive.
 
-Email/Slack/Teams implementations can plug into the outbox delivery protocol while preserving the same state, retry, and audit boundaries; the community core does not need a hosted service to generate, inspect, or retry alerts.
+Email/Slack/Teams implementations can plug into the same adapter/outbox boundary. The SQLite lease implementation is designed for multiple local workers sharing one database; a future horizontally distributed hosted deployment should use a server database/queue rather than treating SQLite as a distributed broker.
 
 ## Repository layout
 
 ```text
 backend/oilsignal/
 ├── agent/          # typed tools, validator, optional LLM client
-├── alerts/         # threshold/composite rules, edge state, transactional delivery outbox
+├── alerts/         # threshold/composite rules, edge state, leased delivery
 ├── analytics/      # deterministic petroleum time-series calculations
 ├── api/            # FastAPI endpoints
-├── data_ingestion/ # EIA client/registry/live ingestion + offline fixtures
+├── data_ingestion/ # EIA client/registry/verification/live ingestion + fixtures
 ├── freshness.py    # WPSR release calendar and stale-data gate
 ├── reports/        # cited report builders + renderers
-└── storage/        # Parquet dataset utilities + SQLModel metadata/outbox
+└── storage/        # Parquet data + SQLModel state/outbox/leases/dead letters
 frontend/           # React + TypeScript + Vite
-examples/           # offline ingestion, verified EIA registry, alert policies
+examples/           # offline ingestion, maintained EIA registry, alert policies
 tests/              # network-free fixtures and acceptance tests
 docs/               # architecture, provenance, freshness, safety, open-core model
 ```
@@ -227,9 +247,9 @@ Community code is Apache-2.0 with no artificial feature lockouts. A commercial h
 
 ## Roadmap
 
-1. Automate periodic re-verification of maintained EIA mappings and expand product-supplied/PADD coverage while preserving stable canonical IDs.
+1. Expand verified PADD/product-supplied coverage plus crude production, exports, and refinery-input balances while preserving stable canonical IDs.
 2. Generalize release calendars and freshness policies beyond WPSR-backed weekly series.
-3. Add production delivery adapters with provider idempotency, leasing/worker concurrency controls, exponential backoff, and dead-letter operations.
+3. Add production email/Slack/Teams adapters with provider idempotency and a distributed hosted worker backend.
 4. Expand the evaluation suite for claim coverage, citation accuracy, alert reproducibility, freshness behavior, and explanation faithfulness.
 5. Add optional private connectors and organization knowledge boundaries.
 6. Add facility/emissions intelligence using public EPA data after the fundamentals workflow is mature.

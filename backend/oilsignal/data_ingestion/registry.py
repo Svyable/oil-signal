@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -21,11 +23,12 @@ class SeriesSpec(BaseModel):
     period_field: str = "period"
     value_field: str = "value"
     missing_values: list[str] = Field(default_factory=lambda: ["", "NA", "--", "-"])
+    release_family: Literal["wpsr"] | None = None
 
     @model_validator(mode="after")
     def validate_request(self) -> SeriesSpec:
         try:
-            Frequency(self.request.frequency)
+            frequency = Frequency(self.request.frequency)
         except ValueError as exc:
             raise ValueError(
                 f"unsupported OilSignal observation frequency: {self.request.frequency}"
@@ -34,6 +37,8 @@ class SeriesSpec(BaseModel):
             raise ValueError(
                 f"value_field {self.value_field!r} must be included in request.data"
             )
+        if self.release_family == "wpsr" and frequency != Frequency.WEEKLY:
+            raise ValueError("WPSR release-family series must use weekly frequency")
         return self
 
     @property
@@ -43,6 +48,7 @@ class SeriesSpec(BaseModel):
 
 class SeriesRegistry(BaseModel):
     version: int = 1
+    verified_at: date | None = None
     note: str | None = None
     series: list[SeriesSpec]
 
