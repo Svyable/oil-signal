@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.engine import Engine
 from sqlmodel import Field, Session, SQLModel, col, create_engine, select
 
 
@@ -137,15 +137,17 @@ def save_alert_transition(
 def get_alert_outbox(path: Path, outbox_id: str) -> AlertOutboxRow | None:
     engine = create_metadata_engine(path)
     with Session(engine) as session:
-        return session.exec(select(AlertOutboxRow).where(AlertOutboxRow.id == outbox_id)).first()
+        row = session.exec(select(AlertOutboxRow).where(AlertOutboxRow.id == outbox_id)).first()
+        return _copy_alert_outbox(row) if row else None
 
 
 def get_alert_delivery_lease(path: Path, outbox_id: str) -> AlertDeliveryLeaseRow | None:
     engine = create_metadata_engine(path)
     with Session(engine) as session:
-        return session.exec(
+        row = session.exec(
             select(AlertDeliveryLeaseRow).where(AlertDeliveryLeaseRow.outbox_id == outbox_id)
         ).first()
+        return _copy_alert_lease(row) if row else None
 
 
 def list_alert_outbox(path: Path, limit: int = 100) -> list[AlertOutboxRow]:
@@ -159,7 +161,7 @@ def list_alert_outbox(path: Path, limit: int = 100) -> list[AlertOutboxRow]:
             .order_by(col(AlertOutboxRow.created_at), col(AlertOutboxRow.id))
             .limit(limit)
         )
-        return list(session.exec(statement).all())
+        return [_copy_alert_outbox(row) for row in session.exec(statement).all()]
 
 
 def save_alert_outbox(path: Path, row: AlertOutboxRow) -> None:
@@ -193,6 +195,7 @@ def claim_alert_outbox(
         max_backoff_seconds=max_backoff_seconds,
     )
     _require_aware(now)
+    now = now.astimezone(UTC)
     engine = create_metadata_engine(path)
     connection = engine.connect()
     session = Session(bind=connection, expire_on_commit=False)
@@ -245,7 +248,7 @@ def claim_alert_outbox(
                 )
             )
             session.flush()
-            claimed = AlertOutboxRow.model_validate(row.model_dump())
+            claimed = _copy_alert_outbox(row)
             connection.commit()
             return claimed
 
@@ -273,6 +276,7 @@ def complete_alert_delivery(
     """Acknowledge a claimed delivery only if the worker still owns a live lease."""
 
     _require_aware(now)
+    now = now.astimezone(UTC)
     if max_attempts < 1:
         raise ValueError("max_attempts must be positive")
     engine = create_metadata_engine(path)
@@ -283,7 +287,11 @@ def complete_alert_delivery(
         lease = session.exec(
             select(AlertDeliveryLeaseRow).where(AlertDeliveryLeaseRow.outbox_id == outbox_id)
         ).first()
-        if lease is None or lease.worker_id != worker_id or lease.expires_at <= now:
+        if (
+            lease is None
+            or lease.worker_id != worker_id
+            or _as_utc(lease.expires_at) <= now
+        ):
             raise AlertLeaseLostError(f"delivery lease is no longer owned by {worker_id}")
 
         row = session.exec(select(AlertOutboxRow).where(AlertOutboxRow.id == outbox_id)).first()
@@ -303,7 +311,7 @@ def complete_alert_delivery(
                 row.status = "failed"
         session.delete(lease)
         session.flush()
-        completed = AlertOutboxRow.model_validate(row.model_dump())
+        completed = _copy_alert_outbox(row)
         connection.commit()
         return completed
     except Exception:
@@ -326,9 +334,9 @@ def list_alert_dead_letters(
     with Session(engine) as session:
         statement = select(AlertDeadLetterRow)
         if active_only:
-            statement = statement.where(AlertDeadLetterRow.requeued_at.is_(None))
+            statement = statement.where(col(AlertDeadLetterRow.requeued_at).is_(None))
         statement = statement.order_by(col(AlertDeadLetterRow.dead_lettered_at).desc()).limit(limit)
-        return list(session.exec(statement).all())
+        return [_copy_dead_letter(row) for row in session.exec(statement).all()]
 
 
 def requeue_alert_dead_letter(
@@ -340,6 +348,7 @@ def requeue_alert_dead_letter(
     """Re-arm a dead-lettered notification with a fresh attempt budget."""
 
     _require_aware(now)
+    now = now.astimezone(UTC)
     engine = create_metadata_engine(path)
     connection = engine.connect()
     session = Session(bind=connection, expire_on_commit=False)
@@ -359,7 +368,7 @@ def requeue_alert_dead_letter(
         dead_letter = session.exec(
             select(AlertDeadLetterRow)
             .where(AlertDeadLetterRow.outbox_id == outbox_id)
-            .where(AlertDeadLetterRow.requeued_at.is_(None))
+            .where(col(AlertDeadLetterRow.requeued_at).is_(None))
             .order_by(col(AlertDeadLetterRow.dead_lettered_at).desc())
         ).first()
         if dead_letter is not None:
@@ -372,7 +381,7 @@ def requeue_alert_dead_letter(
         row.delivered_at = None
         row.last_error = None
         session.flush()
-        requeued = AlertOutboxRow.model_validate(row.model_dump())
+        requeued = _copy_alert_outbox(row)
         connection.commit()
         return requeued
     except Exception:
@@ -394,7 +403,7 @@ def _retry_is_due(
         return True
     exponent = max(row.attempts - 1, 0)
     delay = min(base_backoff_seconds * (2**exponent), max_backoff_seconds)
-    return now >= row.last_attempt_at + timedelta(seconds=delay)
+    return now >= _as_utc(row.last_attempt_at) + timedelta(seconds=delay)
 
 
 def _dead_letter_in_session(
@@ -434,6 +443,39 @@ def _validate_delivery_policy(
         raise ValueError("backoff values cannot be negative")
     if max_backoff_seconds < base_backoff_seconds:
         raise ValueError("max_backoff_seconds cannot be smaller than base_backoff_seconds")
+
+
+def _copy_alert_outbox(row: AlertOutboxRow) -> AlertOutboxRow:
+    data = row.model_dump()
+    for field_name in ("created_at", "last_attempt_at", "delivered_at"):
+        value = data.get(field_name)
+        if isinstance(value, datetime):
+            data[field_name] = _as_utc(value)
+    return AlertOutboxRow.model_validate(data)
+
+
+def _copy_alert_lease(row: AlertDeliveryLeaseRow) -> AlertDeliveryLeaseRow:
+    data = row.model_dump()
+    for field_name in ("leased_at", "expires_at"):
+        value = data.get(field_name)
+        if isinstance(value, datetime):
+            data[field_name] = _as_utc(value)
+    return AlertDeliveryLeaseRow.model_validate(data)
+
+
+def _copy_dead_letter(row: AlertDeadLetterRow) -> AlertDeadLetterRow:
+    data = row.model_dump()
+    for field_name in ("dead_lettered_at", "requeued_at"):
+        value = data.get(field_name)
+        if isinstance(value, datetime):
+            data[field_name] = _as_utc(value)
+    return AlertDeadLetterRow.model_validate(data)
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _require_aware(value: datetime) -> None:
