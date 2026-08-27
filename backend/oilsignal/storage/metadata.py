@@ -46,6 +46,14 @@ def get_ingestion_run(path: Path, run_id: str) -> IngestionRunRow | None:
         return session.exec(select(IngestionRunRow).where(IngestionRunRow.id == run_id)).first()
 
 
+def get_ingestion_run_for_parquet(path: Path, parquet_path: Path) -> IngestionRunRow | None:
+    engine = create_metadata_engine(path)
+    with Session(engine) as session:
+        return session.exec(
+            select(IngestionRunRow).where(IngestionRunRow.parquet_path == str(parquet_path))
+        ).first()
+
+
 def save_ingestion_run(path: Path, row: IngestionRunRow) -> None:
     engine = create_metadata_engine(path)
     with Session(engine) as session:

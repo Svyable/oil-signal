@@ -89,10 +89,18 @@ def check_wpsr_freshness(
     *,
     now: datetime | None = None,
     calendar: WPSRReleaseCalendar | None = None,
+    live_eia: bool | None = None,
 ) -> DatasetFreshness:
     checked_at = now or datetime.now(UTC)
     if checked_at.tzinfo is None:
         raise ValueError("freshness checks require a timezone-aware datetime")
+
+    if live_eia is False:
+        return DatasetFreshness(
+            status=FreshnessState.NOT_APPLICABLE,
+            checked_at=checked_at,
+            reason="latest dataset provenance is not a live EIA ingestion run",
+        )
 
     live_rows = [
         row
@@ -150,8 +158,14 @@ def require_fresh_wpsr(
     *,
     now: datetime | None = None,
     calendar: WPSRReleaseCalendar | None = None,
+    live_eia: bool | None = None,
 ) -> DatasetFreshness:
-    freshness = check_wpsr_freshness(observations, now=now, calendar=calendar)
+    freshness = check_wpsr_freshness(
+        observations,
+        now=now,
+        calendar=calendar,
+        live_eia=live_eia,
+    )
     if freshness.status == FreshnessState.STALE:
         series = ", ".join(freshness.stale_series[:5])
         if len(freshness.stale_series) > 5:

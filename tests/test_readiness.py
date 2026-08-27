@@ -3,6 +3,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 from oilsignal.api.app import create_app
 from oilsignal.data_ingestion.fixtures import FixtureIngestor
+from oilsignal.storage.datasets import inspect_data
 
 FIXTURE = Path(__file__).parent / "fixtures" / "petroleum_weekly.csv"
 
@@ -25,3 +26,4 @@ def test_readiness_fails_closed_without_data_and_reports_dataset_when_ready(
     assert payload["series_count"] >= 1
     assert payload["latest_observation"]
     assert payload["freshness"]["status"] == "not_applicable"
+    assert inspect_data(data_dir).source == "fixture:eia"

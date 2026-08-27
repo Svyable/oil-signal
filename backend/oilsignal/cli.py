@@ -19,7 +19,7 @@ from oilsignal.freshness import FreshnessState, check_wpsr_freshness, require_fr
 from oilsignal.reports.renderers import render_report
 from oilsignal.reports.specialized import DistillateSupplyRiskBrief, RefineryUtilizationWatch
 from oilsignal.reports.weekly import WeeklyPetroleumBrief
-from oilsignal.storage.datasets import load_latest_observations
+from oilsignal.storage.datasets import inspect_data, load_latest_observations
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -94,7 +94,9 @@ async def _eia_metadata(route: str, facet: str | None) -> int:
 
 
 def _freshness(data_dir: Path) -> int:
-    result = check_wpsr_freshness(load_latest_observations(data_dir))
+    observations = load_latest_observations(data_dir)
+    status = inspect_data(data_dir)
+    result = check_wpsr_freshness(observations, live_eia=status.is_live_eia)
     print(result.model_dump_json(indent=2))
     return 2 if result.status == FreshnessState.STALE else 0
 
@@ -106,7 +108,8 @@ def _report(report_type: str, output_format: str, data_dir: Path) -> int:
         "refinery-utilization": RefineryUtilizationWatch(),
     }
     observations = load_latest_observations(data_dir)
-    require_fresh_wpsr(observations)
+    status = inspect_data(data_dir)
+    require_fresh_wpsr(observations, live_eia=status.is_live_eia)
     report = builders[report_type].build(observations)
     print(render_report(report, output_format))
     return 0
@@ -115,7 +118,8 @@ def _report(report_type: str, output_format: str, data_dir: Path) -> int:
 def _alerts_evaluate(rules_path: Path, data_dir: Path, stateless: bool) -> int:
     policy_set = AlertPolicySet.load(rules_path)
     observations = load_latest_observations(data_dir)
-    require_fresh_wpsr(observations)
+    status = inspect_data(data_dir)
+    require_fresh_wpsr(observations, live_eia=status.is_live_eia)
     if stateless:
         result = evaluate_policies(observations, policy_set)
     else:

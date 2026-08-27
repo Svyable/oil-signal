@@ -113,8 +113,9 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     )
 
     def current_observations() -> list[Observation]:
+        data_status = inspect_data(app.state.data_dir)
         observations = load_latest_observations(app.state.data_dir)
-        require_fresh_wpsr(observations)
+        require_fresh_wpsr(observations, live_eia=data_status.is_live_eia)
         return observations
 
     @app.get("/health")
@@ -127,7 +128,10 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         freshness: DatasetFreshness | None = None
         ready = data_status.available
         if data_status.available:
-            freshness = check_wpsr_freshness(load_latest_observations(app.state.data_dir))
+            freshness = check_wpsr_freshness(
+                load_latest_observations(app.state.data_dir),
+                live_eia=data_status.is_live_eia,
+            )
             ready = freshness.status != FreshnessState.STALE
         if not ready:
             response.status_code = 503
