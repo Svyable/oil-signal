@@ -190,9 +190,11 @@ def evaluate_policies_with_state(
             last_as_of=evaluation.as_of.isoformat() if evaluation.as_of else None,
         )
         outbox: AlertOutboxRow | None = None
+        outbox_id: str | None = None
         if notify:
+            outbox_id = f"out_{uuid4().hex}"
             outbox = AlertOutboxRow(
-                id=f"out_{uuid4().hex}",
+                id=outbox_id,
                 policy_id=evaluation.policy_id,
                 created_at=result.evaluated_at,
                 as_of=evaluation.as_of.isoformat() if evaluation.as_of else None,
@@ -206,7 +208,7 @@ def evaluate_policies_with_state(
                 active=evaluation.matched,
                 notify=notify,
                 recovered=recovered,
-                outbox_id=outbox.id if outbox else None,
+                outbox_id=outbox_id,
             )
         )
 
