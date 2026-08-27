@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "note": "Schema-complete example. Use `oilsignal eia-metadata --route petroleum/sum/sndw` to inspect the current EIA route and add facets that resolve each canonical series to one row per period before live ingestion.",
+  "series": [
+    {
+      "canonical_series_id": "example.us_total_petroleum_stocks",
+      "metric": "inventory",
+      "product": "total petroleum",
+      "geography": "US",
+      "unit": "thousand barrels",
+      "period_field": "period",
+      "value_field": "value",
+      "request": {
+        "route": "petroleum/sum/sndw",
+        "frequency": "weekly",
+        "data": ["value"],
+        "facets": {},
+        "start": "2025-01-01",
+        "length": 5000
+      }
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      OILSIGNAL_DATA_DIR: /data
+      OILSIGNAL_EIA_API_KEY: ${EIA_API_KEY:-}
+      OILSIGNAL_LLM_BASE_URL: ${OILSIGNAL_LLM_BASE_URL:-}
+      OILSIGNAL_LLM_API_KEY: ${OILSIGNAL_LLM_API_KEY:-}
+      OILSIGNAL_LLM_MODEL: ${OILSIGNAL_LLM_MODEL:-}
+    command: >-
+      sh -c "python examples/ingest_fixture.py --if-empty &&
+      uvicorn oilsignal.api.app:app --host 0.0.0.0 --port 8000"
+    volumes:
+      - oilsignal-data:/data
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_BASE: http://localhost:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "3000:80"
+
+volumes:
+  oilsignal-data:

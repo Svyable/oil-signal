@@ -1,0 +1,24 @@
+series_id,metric,product,geography,frequency,unit,observation_date,value
+PET.CRDUUS.W,stocks,crude_oil,US,weekly,thousand barrels,2025-07-25,425000
+PET.CRDUUS.W,stocks,crude_oil,US,weekly,thousand barrels,2025-08-01,423500
+PET.CRDUUS.W,stocks,crude_oil,US,weekly,thousand barrels,2025-08-08,421800
+PET.CRDUUS.W,stocks,crude_oil,US,weekly,thousand barrels,2025-08-15,420100
+PET.CRDUUS.W,stocks,crude_oil,US,weekly,thousand barrels,2025-08-22,419000
+PET.CRDUUS.W,stocks,crude_oil,US,weekly,thousand barrels,2026-07-17,421200
+PET.CRDUUS.W,stocks,crude_oil,US,weekly,thousand barrels,2026-07-24,420400
+PET.CRDUUS.W,stocks,crude_oil,US,weekly,thousand barrels,2026-07-31,419600
+PET.CRDUUS.W,stocks,crude_oil,US,weekly,thousand barrels,2026-08-07,417900
+PET.CRDUUS.W,stocks,crude_oil,US,weekly,thousand barrels,2026-08-14,416700
+PET.CRDUUS.W,stocks,crude_oil,US,weekly,thousand barrels,2026-08-21,418200
+PET.DISTP2.W,stocks,distillate,PADD2,weekly,thousand barrels,2025-08-08,29800
+PET.DISTP2.W,stocks,distillate,PADD2,weekly,thousand barrels,2025-08-15,29400
+PET.DISTP2.W,stocks,distillate,PADD2,weekly,thousand barrels,2025-08-22,29100
+PET.DISTP2.W,stocks,distillate,PADD2,weekly,thousand barrels,2026-07-31,28600
+PET.DISTP2.W,stocks,distillate,PADD2,weekly,thousand barrels,2026-08-07,28100
+PET.DISTP2.W,stocks,distillate,PADD2,weekly,thousand barrels,2026-08-14,27600
+PET.DISTP2.W,stocks,distillate,PADD2,weekly,thousand barrels,2026-08-21,26900
+PET.UTILUS.W,refinery_utilization,all_products,US,weekly,percent,2025-08-22,92.4
+PET.UTILUS.W,refinery_utilization,all_products,US,weekly,percent,2026-07-31,93.1
+PET.UTILUS.W,refinery_utilization,all_products,US,weekly,percent,2026-08-07,92.7
+PET.UTILUS.W,refinery_utilization,all_products,US,weekly,percent,2026-08-14,91.9
+PET.UTILUS.W,refinery_utilization,all_products,US,weekly,percent,2026-08-21,90.8
