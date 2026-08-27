@@ -3,10 +3,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from oilsignal.alerts.delivery import ConsoleOutboxDelivery, flush_alert_outbox
+from oilsignal.alerts.delivery import ConsoleOutboxDelivery, DeliveryPolicy, flush_alert_outbox
 from oilsignal.alerts.engine import (
     AlertPolicySet,
     evaluate_policies,
@@ -21,6 +22,7 @@ from oilsignal.reports.renderers import render_report
 from oilsignal.reports.specialized import DistillateSupplyRiskBrief, RefineryUtilizationWatch
 from oilsignal.reports.weekly import WeeklyPetroleumBrief
 from oilsignal.storage.datasets import inspect_data, load_latest_observations
+from oilsignal.storage.metadata import list_alert_dead_letters, requeue_alert_dead_letter
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -64,11 +66,30 @@ def build_parser() -> argparse.ArgumentParser:
 
     deliver = subparsers.add_parser(
         "alerts-deliver",
-        help="deliver pending alert outbox rows with retry receipts",
+        help="drain eligible alert rows with leases, backoff, and dead-lettering",
     )
     deliver.add_argument("--adapter", choices=["console"], default="console")
     deliver.add_argument("--data-dir", type=Path, default=settings.data_dir)
     deliver.add_argument("--limit", type=int, default=100)
+    deliver.add_argument("--worker-id")
+    deliver.add_argument("--lease-seconds", type=int, default=120)
+    deliver.add_argument("--max-attempts", type=int, default=5)
+    deliver.add_argument("--base-backoff-seconds", type=int, default=30)
+    deliver.add_argument("--max-backoff-seconds", type=int, default=3600)
+
+    dead_letters = subparsers.add_parser(
+        "alerts-dead-letters",
+        help="list active alert dead letters",
+    )
+    dead_letters.add_argument("--data-dir", type=Path, default=settings.data_dir)
+    dead_letters.add_argument("--limit", type=int, default=100)
+
+    requeue = subparsers.add_parser(
+        "alerts-requeue",
+        help="requeue a dead-lettered alert with a fresh attempt budget",
+    )
+    requeue.add_argument("--outbox-id", required=True)
+    requeue.add_argument("--data-dir", type=Path, default=settings.data_dir)
     return parser
 
 
@@ -85,7 +106,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "alerts-evaluate":
         return _alerts_evaluate(args.rules, args.data_dir, args.stateless)
     if args.command == "alerts-deliver":
-        return _alerts_deliver(args.adapter, args.data_dir, args.limit)
+        return _alerts_deliver(
+            args.adapter,
+            args.data_dir,
+            args.limit,
+            args.worker_id,
+            args.lease_seconds,
+            args.max_attempts,
+            args.base_backoff_seconds,
+            args.max_backoff_seconds,
+        )
+    if args.command == "alerts-dead-letters":
+        return _alerts_dead_letters(args.data_dir, args.limit)
+    if args.command == "alerts-requeue":
+        return _alerts_requeue(args.data_dir, args.outbox_id)
     raise RuntimeError(f"unhandled command: {args.command}")
 
 
@@ -143,16 +177,50 @@ def _alerts_evaluate(rules_path: Path, data_dir: Path, stateless: bool) -> int:
     return 0
 
 
-def _alerts_deliver(adapter_name: str, data_dir: Path, limit: int) -> int:
+def _alerts_deliver(
+    adapter_name: str,
+    data_dir: Path,
+    limit: int,
+    worker_id: str | None,
+    lease_seconds: int,
+    max_attempts: int,
+    base_backoff_seconds: int,
+    max_backoff_seconds: int,
+) -> int:
     if adapter_name != "console":
         raise ValueError(f"unsupported delivery adapter: {adapter_name}")
+    policy = DeliveryPolicy(
+        lease_seconds=lease_seconds,
+        max_attempts=max_attempts,
+        base_backoff_seconds=base_backoff_seconds,
+        max_backoff_seconds=max_backoff_seconds,
+    )
     receipts = flush_alert_outbox(
         data_dir / "metadata.sqlite",
         ConsoleOutboxDelivery(),
         limit=limit,
+        worker_id=worker_id,
+        policy=policy,
     )
     print(json.dumps([receipt.model_dump(mode="json") for receipt in receipts], indent=2))
-    return 1 if any(receipt.status == "failed" for receipt in receipts) else 0
+    bad_statuses = {"failed", "dead_letter", "lease_lost"}
+    return 1 if any(receipt.status in bad_statuses for receipt in receipts) else 0
+
+
+def _alerts_dead_letters(data_dir: Path, limit: int) -> int:
+    rows = list_alert_dead_letters(data_dir / "metadata.sqlite", limit=limit)
+    print(json.dumps([row.model_dump(mode="json") for row in rows], indent=2))
+    return 1 if rows else 0
+
+
+def _alerts_requeue(data_dir: Path, outbox_id: str) -> int:
+    row = requeue_alert_dead_letter(
+        data_dir / "metadata.sqlite",
+        outbox_id=outbox_id,
+        now=datetime.now(UTC),
+    )
+    print(json.dumps(row.model_dump(mode="json"), indent=2))
+    return 0
 
 
 def _eia_client() -> EIAClient:
