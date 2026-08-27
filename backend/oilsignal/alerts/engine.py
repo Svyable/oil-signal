@@ -4,13 +4,19 @@ import json
 from datetime import UTC, date, datetime
 from enum import StrEnum
 from pathlib import Path
+from uuid import uuid4
 
 from pydantic import BaseModel, Field, model_validator
 
 from oilsignal.alerts.rules import MetricField, Operator, ThresholdRule
 from oilsignal.analytics.petroleum import SeriesSnapshot, build_snapshot
 from oilsignal.models import Observation
-from oilsignal.storage.metadata import AlertStateRow, get_alert_state, save_alert_state
+from oilsignal.storage.metadata import (
+    AlertOutboxRow,
+    AlertStateRow,
+    get_alert_state,
+    save_alert_transition,
+)
 
 
 class MatchMode(StrEnum):
@@ -114,6 +120,7 @@ class PolicyStateTransition(BaseModel):
     active: bool
     notify: bool
     recovered: bool
+    outbox_id: str | None = None
 
 
 class StatefulAlertEvaluationResult(AlertEvaluationResult):
@@ -149,7 +156,7 @@ def evaluate_policies_with_state(
     policy_set: AlertPolicySet,
     metadata_path: Path,
 ) -> StatefulAlertEvaluationResult:
-    """Evaluate policies and emit notifications only on inactive -> active transitions."""
+    """Evaluate policies and atomically enqueue inactive -> active notifications."""
 
     result = evaluate_policies(observations, policy_set)
     notifications: list[PolicyEvaluation] = []
@@ -175,16 +182,23 @@ def evaluate_policies_with_state(
             if existing
             else None
         )
-        save_alert_state(
-            metadata_path,
-            AlertStateRow(
-                policy_id=evaluation.policy_id,
-                active=evaluation.matched,
-                last_changed_at=changed_at,
-                last_triggered_at=last_triggered_at,
-                last_as_of=evaluation.as_of.isoformat() if evaluation.as_of else None,
-            ),
+        state = AlertStateRow(
+            policy_id=evaluation.policy_id,
+            active=evaluation.matched,
+            last_changed_at=changed_at,
+            last_triggered_at=last_triggered_at,
+            last_as_of=evaluation.as_of.isoformat() if evaluation.as_of else None,
         )
+        outbox: AlertOutboxRow | None = None
+        if notify:
+            outbox = AlertOutboxRow(
+                id=f"out_{uuid4().hex}",
+                policy_id=evaluation.policy_id,
+                created_at=result.evaluated_at,
+                as_of=evaluation.as_of.isoformat() if evaluation.as_of else None,
+                payload_json=evaluation.model_dump_json(),
+            )
+        save_alert_transition(metadata_path, state, outbox)
         transitions.append(
             PolicyStateTransition(
                 policy_id=evaluation.policy_id,
@@ -192,6 +206,7 @@ def evaluate_policies_with_state(
                 active=evaluation.matched,
                 notify=notify,
                 recovered=recovered,
+                outbox_id=outbox.id if outbox else None,
             )
         )
 

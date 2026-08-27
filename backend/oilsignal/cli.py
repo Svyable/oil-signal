@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from oilsignal.alerts.delivery import ConsoleOutboxDelivery, flush_alert_outbox
 from oilsignal.alerts.engine import (
     AlertPolicySet,
     evaluate_policies,
@@ -60,6 +61,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="dry-run every matching policy instead of edge-triggered notification state",
     )
+
+    deliver = subparsers.add_parser(
+        "alerts-deliver",
+        help="deliver pending alert outbox rows with retry receipts",
+    )
+    deliver.add_argument("--adapter", choices=["console"], default="console")
+    deliver.add_argument("--data-dir", type=Path, default=settings.data_dir)
+    deliver.add_argument("--limit", type=int, default=100)
     return parser
 
 
@@ -75,6 +84,8 @@ def main(argv: list[str] | None = None) -> int:
         return _report(args.type, args.format, args.data_dir)
     if args.command == "alerts-evaluate":
         return _alerts_evaluate(args.rules, args.data_dir, args.stateless)
+    if args.command == "alerts-deliver":
+        return _alerts_deliver(args.adapter, args.data_dir, args.limit)
     raise RuntimeError(f"unhandled command: {args.command}")
 
 
@@ -130,6 +141,18 @@ def _alerts_evaluate(rules_path: Path, data_dir: Path, stateless: bool) -> int:
         )
     print(result.model_dump_json(indent=2))
     return 0
+
+
+def _alerts_deliver(adapter_name: str, data_dir: Path, limit: int) -> int:
+    if adapter_name != "console":
+        raise ValueError(f"unsupported delivery adapter: {adapter_name}")
+    receipts = flush_alert_outbox(
+        data_dir / "metadata.sqlite",
+        ConsoleOutboxDelivery(),
+        limit=limit,
+    )
+    print(json.dumps([receipt.model_dump(mode="json") for receipt in receipts], indent=2))
+    return 1 if any(receipt.status == "failed" for receipt in receipts) else 0
 
 
 def _eia_client() -> EIAClient:
