@@ -1,21 +1,116 @@
 {
   "version": 1,
-  "note": "Schema-complete example. Use `oilsignal eia-metadata --route petroleum/sum/sndw` to inspect the current EIA route and add facets that resolve each canonical series to one row per period before live ingestion.",
+  "note": "Verified public EIA weekly petroleum mappings as of 2026-08-26. Uses EIA API v2's documented /seriesid/ compatibility route so each request resolves one legacy weekly series without ambiguous facets.",
   "series": [
     {
-      "canonical_series_id": "example.us_total_petroleum_stocks",
+      "canonical_series_id": "PET.CRDUUS.W",
       "metric": "inventory",
-      "product": "total petroleum",
+      "product": "crude oil excluding SPR",
       "geography": "US",
       "unit": "thousand barrels",
       "period_field": "period",
       "value_field": "value",
       "request": {
-        "route": "petroleum/sum/sndw",
+        "route": "seriesid/PET.WCESTUS1.W",
         "frequency": "weekly",
         "data": ["value"],
         "facets": {},
-        "start": "2025-01-01",
+        "length": 5000
+      }
+    },
+    {
+      "canonical_series_id": "PET.GASUS.W",
+      "metric": "inventory",
+      "product": "total gasoline",
+      "geography": "US",
+      "unit": "thousand barrels",
+      "period_field": "period",
+      "value_field": "value",
+      "request": {
+        "route": "seriesid/PET.WGTSTUS1.W",
+        "frequency": "weekly",
+        "data": ["value"],
+        "facets": {},
+        "length": 5000
+      }
+    },
+    {
+      "canonical_series_id": "PET.DISTUS.W",
+      "metric": "inventory",
+      "product": "distillate fuel oil",
+      "geography": "US",
+      "unit": "thousand barrels",
+      "period_field": "period",
+      "value_field": "value",
+      "request": {
+        "route": "seriesid/PET.WDISTUS1.W",
+        "frequency": "weekly",
+        "data": ["value"],
+        "facets": {},
+        "length": 5000
+      }
+    },
+    {
+      "canonical_series_id": "PET.DISTP2.W",
+      "metric": "inventory",
+      "product": "distillate fuel oil",
+      "geography": "PADD2",
+      "unit": "thousand barrels",
+      "period_field": "period",
+      "value_field": "value",
+      "request": {
+        "route": "seriesid/PET.WDISTP21.W",
+        "frequency": "weekly",
+        "data": ["value"],
+        "facets": {},
+        "length": 5000
+      }
+    },
+    {
+      "canonical_series_id": "PET.JETUS.W",
+      "metric": "inventory",
+      "product": "kerosene-type jet fuel",
+      "geography": "US",
+      "unit": "thousand barrels",
+      "period_field": "period",
+      "value_field": "value",
+      "request": {
+        "route": "seriesid/PET.WKJSTUS1.W",
+        "frequency": "weekly",
+        "data": ["value"],
+        "facets": {},
+        "length": 5000
+      }
+    },
+    {
+      "canonical_series_id": "PET.UTILUS.W",
+      "metric": "refinery_utilization",
+      "product": "refinery operable capacity",
+      "geography": "US",
+      "unit": "percent",
+      "period_field": "period",
+      "value_field": "value",
+      "request": {
+        "route": "seriesid/PET.WPULEUS3.W",
+        "frequency": "weekly",
+        "data": ["value"],
+        "facets": {},
+        "length": 5000
+      }
+    },
+    {
+      "canonical_series_id": "PET.CRIMUS.W",
+      "metric": "imports",
+      "product": "crude oil",
+      "geography": "US",
+      "unit": "thousand barrels per day",
+      "period_field": "period",
+      "value_field": "value",
+      "request": {
+        "route": "seriesid/PET.WCRIMUS2.W",
+        "frequency": "weekly",
+        "data": ["value"],
+        "facets": {},
         "length": 5000
       }
     }

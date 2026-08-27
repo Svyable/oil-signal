@@ -24,3 +24,4 @@ def test_readiness_fails_closed_without_data_and_reports_dataset_when_ready(
     assert payload["status"] == "ready"
     assert payload["series_count"] >= 1
     assert payload["latest_observation"]
+    assert payload["freshness"]["status"] == "not_applicable"

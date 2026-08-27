@@ -15,6 +15,7 @@ from oilsignal.config import settings
 from oilsignal.data_ingestion.eia import EIAClient
 from oilsignal.data_ingestion.live import EIAIngestor
 from oilsignal.data_ingestion.registry import SeriesRegistry
+from oilsignal.freshness import FreshnessState, check_wpsr_freshness, require_fresh_wpsr
 from oilsignal.reports.renderers import render_report
 from oilsignal.reports.specialized import DistillateSupplyRiskBrief, RefineryUtilizationWatch
 from oilsignal.reports.weekly import WeeklyPetroleumBrief
@@ -32,6 +33,12 @@ def build_parser() -> argparse.ArgumentParser:
     metadata = subparsers.add_parser("eia-metadata", help="inspect EIA route metadata or facets")
     metadata.add_argument("--route", required=True)
     metadata.add_argument("--facet")
+
+    freshness = subparsers.add_parser(
+        "freshness",
+        help="check the latest dataset against the WPSR release calendar",
+    )
+    freshness.add_argument("--data-dir", type=Path, default=settings.data_dir)
 
     report = subparsers.add_parser("report", help="render a deterministic cited report")
     report.add_argument(
@@ -62,6 +69,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_ingest_eia(args.registry, args.data_dir))
     if args.command == "eia-metadata":
         return asyncio.run(_eia_metadata(args.route, args.facet))
+    if args.command == "freshness":
+        return _freshness(args.data_dir)
     if args.command == "report":
         return _report(args.type, args.format, args.data_dir)
     if args.command == "alerts-evaluate":
@@ -84,13 +93,21 @@ async def _eia_metadata(route: str, facet: str | None) -> int:
     return 0
 
 
+def _freshness(data_dir: Path) -> int:
+    result = check_wpsr_freshness(load_latest_observations(data_dir))
+    print(result.model_dump_json(indent=2))
+    return 2 if result.status == FreshnessState.STALE else 0
+
+
 def _report(report_type: str, output_format: str, data_dir: Path) -> int:
     builders: dict[str, Any] = {
         "weekly": WeeklyPetroleumBrief(),
         "distillate": DistillateSupplyRiskBrief(),
         "refinery-utilization": RefineryUtilizationWatch(),
     }
-    report = builders[report_type].build(load_latest_observations(data_dir))
+    observations = load_latest_observations(data_dir)
+    require_fresh_wpsr(observations)
+    report = builders[report_type].build(observations)
     print(render_report(report, output_format))
     return 0
 
@@ -98,6 +115,7 @@ def _report(report_type: str, output_format: str, data_dir: Path) -> int:
 def _alerts_evaluate(rules_path: Path, data_dir: Path, stateless: bool) -> int:
     policy_set = AlertPolicySet.load(rules_path)
     observations = load_latest_observations(data_dir)
+    require_fresh_wpsr(observations)
     if stateless:
         result = evaluate_policies(observations, policy_set)
     else:
