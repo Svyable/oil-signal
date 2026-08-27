@@ -121,6 +121,74 @@
         "facets": {},
         "length": 5000
       }
+    },
+    {
+      "canonical_series_id": "PET.GASPSUS.W",
+      "metric": "product_supplied",
+      "product": "finished motor gasoline",
+      "geography": "US",
+      "unit": "thousand barrels per day",
+      "period_field": "period",
+      "value_field": "value",
+      "release_family": "wpsr",
+      "request": {
+        "route": "seriesid/PET.WGFUPUS2.W",
+        "frequency": "weekly",
+        "data": ["value"],
+        "facets": {},
+        "length": 5000
+      }
+    },
+    {
+      "canonical_series_id": "PET.DISTPSUS.W",
+      "metric": "product_supplied",
+      "product": "distillate fuel oil",
+      "geography": "US",
+      "unit": "thousand barrels per day",
+      "period_field": "period",
+      "value_field": "value",
+      "release_family": "wpsr",
+      "request": {
+        "route": "seriesid/PET.WDIUPUS2.W",
+        "frequency": "weekly",
+        "data": ["value"],
+        "facets": {},
+        "length": 5000
+      }
+    },
+    {
+      "canonical_series_id": "PET.JETPSUS.W",
+      "metric": "product_supplied",
+      "product": "kerosene-type jet fuel",
+      "geography": "US",
+      "unit": "thousand barrels per day",
+      "period_field": "period",
+      "value_field": "value",
+      "release_family": "wpsr",
+      "request": {
+        "route": "seriesid/PET.WKJUPUS2.W",
+        "frequency": "weekly",
+        "data": ["value"],
+        "facets": {},
+        "length": 5000
+      }
+    },
+    {
+      "canonical_series_id": "PET.TOTALPSUS.W",
+      "metric": "product_supplied",
+      "product": "petroleum products",
+      "geography": "US",
+      "unit": "thousand barrels per day",
+      "period_field": "period",
+      "value_field": "value",
+      "release_family": "wpsr",
+      "request": {
+        "route": "seriesid/PET.WRPUPUS2.W",
+        "frequency": "weekly",
+        "data": ["value"],
+        "facets": {},
+        "length": 5000
+      }
     }
   ]
 }
