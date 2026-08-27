@@ -7,15 +7,21 @@ from pydantic import BaseModel
 
 from oilsignal.data_ingestion.fixtures import load_observations
 from oilsignal.models import Observation
+from oilsignal.storage.metadata import get_ingestion_run_for_parquet
 
 
 class DataStatus(BaseModel):
     available: bool
     parquet_path: str | None = None
+    source: str | None = None
     series_count: int = 0
     observation_count: int = 0
     latest_observation: date | None = None
     latest_fetched_at: datetime | None = None
+
+    @property
+    def is_live_eia(self) -> bool:
+        return self.source == "eia:v2"
 
 
 def latest_parquet(data_dir: Path) -> Path:
@@ -35,11 +41,18 @@ def inspect_data(data_dir: Path) -> DataStatus:
     except FileNotFoundError:
         return DataStatus(available=False)
     observations = load_observations(parquet_path)
+    run = get_ingestion_run_for_parquet(data_dir / "metadata.sqlite", parquet_path)
+    source = run.source if run else None
     if not observations:
-        return DataStatus(available=False, parquet_path=str(parquet_path))
+        return DataStatus(
+            available=False,
+            parquet_path=str(parquet_path),
+            source=source,
+        )
     return DataStatus(
         available=True,
         parquet_path=str(parquet_path),
+        source=source,
         series_count=len({item.series_id for item in observations}),
         observation_count=len(observations),
         latest_observation=max(item.observation_date for item in observations),

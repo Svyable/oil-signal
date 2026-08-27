@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy.engine import Engine
-from sqlmodel import Field, Session, SQLModel, create_engine, select
+from sqlmodel import Field, Session, SQLModel, col, create_engine, select
 
 
 class IngestionRunRow(SQLModel, table=True):
@@ -33,6 +33,20 @@ class AlertStateRow(SQLModel, table=True):
     last_as_of: str | None = None
 
 
+class AlertOutboxRow(SQLModel, table=True):
+    id: str = Field(primary_key=True)
+    policy_id: str = Field(index=True)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC), index=True)
+    as_of: str | None = None
+    payload_json: str
+    status: str = Field(default="pending", index=True)
+    adapter: str | None = None
+    attempts: int = 0
+    last_attempt_at: datetime | None = None
+    delivered_at: datetime | None = None
+    last_error: str | None = None
+
+
 def create_metadata_engine(path: Path) -> Engine:
     path.parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(f"sqlite:///{path}")
@@ -44,6 +58,14 @@ def get_ingestion_run(path: Path, run_id: str) -> IngestionRunRow | None:
     engine = create_metadata_engine(path)
     with Session(engine) as session:
         return session.exec(select(IngestionRunRow).where(IngestionRunRow.id == run_id)).first()
+
+
+def get_ingestion_run_for_parquet(path: Path, parquet_path: Path) -> IngestionRunRow | None:
+    engine = create_metadata_engine(path)
+    with Session(engine) as session:
+        return session.exec(
+            select(IngestionRunRow).where(IngestionRunRow.parquet_path == str(parquet_path))
+        ).first()
 
 
 def save_ingestion_run(path: Path, row: IngestionRunRow) -> None:
@@ -67,6 +89,48 @@ def get_alert_state(path: Path, policy_id: str) -> AlertStateRow | None:
 
 
 def save_alert_state(path: Path, row: AlertStateRow) -> None:
+    engine = create_metadata_engine(path)
+    with Session(engine) as session:
+        session.merge(row)
+        session.commit()
+
+
+def save_alert_transition(
+    path: Path,
+    state: AlertStateRow,
+    outbox: AlertOutboxRow | None,
+) -> None:
+    """Persist alert state and its notification enqueue in one transaction."""
+
+    engine = create_metadata_engine(path)
+    with Session(engine) as session:
+        session.merge(state)
+        if outbox is not None:
+            session.add(outbox)
+        session.commit()
+
+
+def get_alert_outbox(path: Path, outbox_id: str) -> AlertOutboxRow | None:
+    engine = create_metadata_engine(path)
+    with Session(engine) as session:
+        return session.exec(select(AlertOutboxRow).where(AlertOutboxRow.id == outbox_id)).first()
+
+
+def list_alert_outbox(path: Path, limit: int = 100) -> list[AlertOutboxRow]:
+    if limit < 1:
+        raise ValueError("outbox limit must be positive")
+    engine = create_metadata_engine(path)
+    with Session(engine) as session:
+        statement = (
+            select(AlertOutboxRow)
+            .where(AlertOutboxRow.status != "delivered")
+            .order_by(col(AlertOutboxRow.created_at), col(AlertOutboxRow.id))
+            .limit(limit)
+        )
+        return list(session.exec(statement).all())
+
+
+def save_alert_outbox(path: Path, row: AlertOutboxRow) -> None:
     engine = create_metadata_engine(path)
     with Session(engine) as session:
         session.merge(row)

@@ -15,6 +15,12 @@ from oilsignal.alerts.engine import (
 )
 from oilsignal.analytics.petroleum import build_snapshot
 from oilsignal.config import settings
+from oilsignal.freshness import (
+    DatasetFreshness,
+    FreshnessState,
+    check_wpsr_freshness,
+    require_fresh_wpsr,
+)
 from oilsignal.models import Citation, Observation, Report
 from oilsignal.reports.renderers import render_report
 from oilsignal.reports.specialized import DistillateSupplyRiskBrief, RefineryUtilizationWatch
@@ -44,6 +50,7 @@ class ReadinessResponse(BaseModel):
     observation_count: int
     latest_observation: str | None = None
     latest_fetched_at: str | None = None
+    freshness: DatasetFreshness | None = None
 
 
 def _citation(row: Observation, calculation_id: str | None = None) -> Citation:
@@ -105,6 +112,12 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         allow_headers=["Content-Type"],
     )
 
+    def current_observations() -> list[Observation]:
+        data_status = inspect_data(app.state.data_dir)
+        observations = load_latest_observations(app.state.data_dir)
+        require_fresh_wpsr(observations, live_eia=data_status.is_live_eia)
+        return observations
+
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
@@ -112,10 +125,18 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     @app.get("/health/ready", response_model=ReadinessResponse)
     def readiness(response: Response) -> ReadinessResponse:
         data_status = inspect_data(app.state.data_dir)
-        if not data_status.available:
+        freshness: DatasetFreshness | None = None
+        ready = data_status.available
+        if data_status.available:
+            freshness = check_wpsr_freshness(
+                load_latest_observations(app.state.data_dir),
+                live_eia=data_status.is_live_eia,
+            )
+            ready = freshness.status != FreshnessState.STALE
+        if not ready:
             response.status_code = 503
         return ReadinessResponse(
-            status="ready" if data_status.available else "not_ready",
+            status="ready" if ready else "not_ready",
             data_available=data_status.available,
             series_count=data_status.series_count,
             observation_count=data_status.observation_count,
@@ -127,26 +148,27 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             latest_fetched_at=(
                 data_status.latest_fetched_at.isoformat() if data_status.latest_fetched_at else None
             ),
+            freshness=freshness,
         )
 
     @app.get("/api/reports/weekly", response_model=Report)
     def weekly_report() -> Report:
         try:
-            return WeeklyPetroleumBrief().build(load_latest_observations(app.state.data_dir))
+            return WeeklyPetroleumBrief().build(current_observations())
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/api/reports/distillate", response_model=Report)
     def distillate_report() -> Report:
         try:
-            return DistillateSupplyRiskBrief().build(load_latest_observations(app.state.data_dir))
+            return DistillateSupplyRiskBrief().build(current_observations())
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/api/reports/refinery-utilization", response_model=Report)
     def refinery_report() -> Report:
         try:
-            return RefineryUtilizationWatch().build(load_latest_observations(app.state.data_dir))
+            return RefineryUtilizationWatch().build(current_observations())
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -155,7 +177,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         if format not in {"markdown", "md", "html", "json"}:
             raise HTTPException(status_code=422, detail=f"unsupported report format: {format}")
         try:
-            report = WeeklyPetroleumBrief().build(load_latest_observations(app.state.data_dir))
+            report = WeeklyPetroleumBrief().build(current_observations())
             return RenderedReport(format=format, content=render_report(report, format))
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -163,7 +185,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     @app.post("/api/alerts/evaluate", response_model=AlertEvaluationResult)
     def alert_evaluation(policy_set: AlertPolicySet) -> AlertEvaluationResult:
         try:
-            return evaluate_policies(load_latest_observations(app.state.data_dir), policy_set)
+            return evaluate_policies(current_observations(), policy_set)
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -171,7 +193,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     def stateful_alert_evaluation(policy_set: AlertPolicySet) -> StatefulAlertEvaluationResult:
         try:
             return evaluate_policies_with_state(
-                load_latest_observations(app.state.data_dir),
+                current_observations(),
                 policy_set,
                 app.state.data_dir / "metadata.sqlite",
             )
@@ -181,10 +203,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     @app.post("/api/ask", response_model=AskResponse)
     def ask(request: AskRequest) -> AskResponse:
         try:
-            return _deterministic_answer(
-                request.question,
-                load_latest_observations(app.state.data_dir),
-            )
+            return _deterministic_answer(request.question, current_observations())
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
