@@ -15,9 +15,33 @@ class MetricSpec:
 
 
 DEFAULT_METRICS = (
-    MetricSpec("PET.CRDUUS.W", "U.S. crude oil stocks", "Inventories"),
+    MetricSpec("PET.CRDUUS.W", "U.S. crude oil stocks", "Crude inventories"),
+    MetricSpec("PET.GASUS.W", "U.S. total gasoline stocks", "Gasoline inventories"),
+    MetricSpec("PET.DISTUS.W", "U.S. distillate stocks", "Distillate inventories"),
     MetricSpec("PET.DISTP2.W", "PADD 2 distillate stocks", "Midwest distillate"),
+    MetricSpec("PET.JETUS.W", "U.S. jet fuel stocks", "Jet fuel inventories"),
     MetricSpec("PET.UTILUS.W", "U.S. refinery utilization", "Refinery operations"),
+    MetricSpec("PET.CRIMUS.W", "U.S. crude oil imports", "Crude imports"),
+    MetricSpec(
+        "PET.GASPSUS.W",
+        "U.S. finished motor gasoline product supplied",
+        "Gasoline demand proxy",
+    ),
+    MetricSpec(
+        "PET.DISTPSUS.W",
+        "U.S. distillate product supplied",
+        "Distillate demand proxy",
+    ),
+    MetricSpec(
+        "PET.JETPSUS.W",
+        "U.S. jet fuel product supplied",
+        "Jet fuel demand proxy",
+    ),
+    MetricSpec(
+        "PET.TOTALPSUS.W",
+        "U.S. petroleum products supplied",
+        "Aggregate demand proxy",
+    ),
 )
 
 

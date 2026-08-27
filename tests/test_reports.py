@@ -51,6 +51,34 @@ def test_specialized_operational_briefs_are_available(data_dir: Path) -> None:
     assert refinery.iter_claims()[0].citations
 
 
+def test_distillate_brief_adds_demand_pressure_when_product_supplied_exists(
+    data_dir: Path,
+) -> None:
+    observations = _observations(data_dir)
+    source_rows = [row for row in observations if row.series_id == "PET.DISTP2.W"][-2:]
+    demand_rows = [
+        row.model_copy(
+            update={
+                "series_id": "PET.DISTPSUS.W",
+                "metric": "product_supplied",
+                "product": "distillate fuel oil",
+                "geography": "US",
+                "unit": "thousand barrels per day",
+                "value": 4100.0 + index * 100.0,
+            }
+        )
+        for index, row in enumerate(source_rows)
+    ]
+
+    report = DistillateSupplyRiskBrief().build([*observations, *demand_rows])
+
+    assert len(report.iter_claims()) == 2
+    assert report.sections[1].heading == "Demand pressure"
+    demand_claim = report.sections[1].claims[0]
+    assert "product supplied" in demand_claim.text
+    assert all(citation.series_id == "PET.DISTPSUS.W" for citation in demand_claim.citations)
+
+
 def test_claim_validator_rejects_uncited_numerical_statement() -> None:
     report = Report(
         report_type="test",
