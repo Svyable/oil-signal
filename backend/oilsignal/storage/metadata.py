@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy.engine import Engine
-from sqlmodel import Field, Session, SQLModel, create_engine, select
+from sqlmodel import Field, Session, SQLModel, col, create_engine, select
 
 
 class IngestionRunRow(SQLModel, table=True):
@@ -124,7 +124,7 @@ def list_alert_outbox(path: Path, limit: int = 100) -> list[AlertOutboxRow]:
         statement = (
             select(AlertOutboxRow)
             .where(AlertOutboxRow.status != "delivered")
-            .order_by(AlertOutboxRow.created_at, AlertOutboxRow.id)
+            .order_by(col(AlertOutboxRow.created_at), col(AlertOutboxRow.id))
             .limit(limit)
         )
         return list(session.exec(statement).all())
