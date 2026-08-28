@@ -274,6 +274,7 @@ def _build_delivery_adapter(
             bearer_token=bearer_token,
             signing_secret=signing_secret,
             timeout_seconds=settings.alert_webhook_timeout_seconds,
+            allow_insecure_http=settings.alert_webhook_allow_insecure_http,
         )
     raise ValueError(f"unsupported delivery adapter: {adapter_name}")
 
