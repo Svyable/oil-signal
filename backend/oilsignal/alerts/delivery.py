@@ -34,6 +34,10 @@ class ConsoleOutboxDelivery:
         print(payload_json)
 
 
+class WebhookDeliveryError(RuntimeError):
+    """Sanitized network/provider failure safe to persist in delivery metadata."""
+
+
 class WebhookOutboxDelivery:
     """Vendor-neutral HTTP delivery with stable retry identity and optional authentication."""
 
@@ -80,17 +84,26 @@ class WebhookOutboxDelivery:
             digest = hmac.new(self.signing_secret.encode(), message, sha256).hexdigest()
             headers["X-OilSignal-Signature"] = f"sha256={digest}"
 
-        with httpx.Client(
-            timeout=self.timeout_seconds,
-            transport=self.transport,
-            follow_redirects=False,
-        ) as client:
-            response = client.post(
-                self.endpoint,
-                content=payload_json.encode(),
-                headers=headers,
-            )
-            response.raise_for_status()
+        try:
+            with httpx.Client(
+                timeout=self.timeout_seconds,
+                transport=self.transport,
+                follow_redirects=False,
+            ) as client:
+                response = client.post(
+                    self.endpoint,
+                    content=payload_json.encode(),
+                    headers=headers,
+                )
+                response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise WebhookDeliveryError(
+                f"webhook returned HTTP {exc.response.status_code}"
+            ) from None
+        except httpx.HTTPError as exc:
+            raise WebhookDeliveryError(
+                f"webhook transport failed: {exc.__class__.__name__}"
+            ) from None
 
 
 class DeliveryPolicy(BaseModel):
