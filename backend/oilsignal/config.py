@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,6 +15,10 @@ class Settings(BaseSettings):
     llm_base_url: str | None = None
     llm_api_key: str | None = None
     llm_model: str | None = None
+    alert_webhook_url: str | None = None
+    alert_webhook_bearer_token: SecretStr | None = None
+    alert_webhook_signing_secret: SecretStr | None = None
+    alert_webhook_timeout_seconds: float = Field(default=10.0, gt=0)
 
     @property
     def parquet_dir(self) -> Path:
