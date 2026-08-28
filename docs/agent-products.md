@@ -113,19 +113,21 @@ This digest is an integrity/fingerprinting primitive, not a digital signature. A
 OilSignal returns:
 
 ```text
-ETag: "sha256:<evidence_sha256>"
+ETag: W/"sha256:<evidence_sha256>"
 X-OilSignal-Evidence-SHA256: <evidence_sha256>
 X-OilSignal-SKU: <sku>
 Cache-Control: private, max-age=0, must-revalidate
 ```
 
+The ETag is deliberately **weak** because the JSON representation includes runtime fields such as `generated_at` and freshness `checked_at` that can change while the purchased semantic evidence remains equivalent. `X-OilSignal-Evidence-SHA256` is the stable semantic integrity fingerprint.
+
 An agent can revalidate without downloading the full pack:
 
 ```text
-If-None-Match: "sha256:<previous evidence_sha256>"
+If-None-Match: W/"sha256:<previous evidence_sha256>"
 ```
 
-If the semantic evidence is unchanged, OilSignal returns `304 Not Modified` with an empty body.
+For GET revalidation OilSignal uses weak comparison semantics, so the equivalent quoted tag without the `W/` prefix is also accepted. If the semantic evidence is unchanged, OilSignal returns `304 Not Modified` with an empty body.
 
 A future payment middleware should decide whether a 304 revalidation is free, discounted, or billable. That commercial decision is deliberately not encoded into the intelligence core.
 
