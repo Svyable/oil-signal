@@ -110,25 +110,31 @@ def _question_series(question: str) -> tuple[str, str]:
 def _deterministic_answer(question: str, observations: list[Observation]) -> AskResponse:
     normalized = question.lower()
     if "crude" in normalized and "balance" in normalized:
-        snapshot = build_crude_balance(observations)
-        trace = snapshot.core_flow_balance
+        balance_snapshot = build_crude_balance(observations)
+        trace = balance_snapshot.core_flow_balance
         evidence = [
             _citation(
                 next(
                     row
                     for row in observations
-                    if row.series_id == series_id and row.observation_date == snapshot.as_of
+                    if row.series_id == series_id
+                    and row.observation_date == balance_snapshot.as_of
                 ),
                 trace.calculation_id,
             )
-            for series_id in (CRUDE_PRODUCTION, CRUDE_IMPORTS, CRUDE_EXPORTS, CRUDE_REFINERY_INPUT)
+            for series_id in (
+                CRUDE_PRODUCTION,
+                CRUDE_IMPORTS,
+                CRUDE_EXPORTS,
+                CRUDE_REFINERY_INPUT,
+            )
         ]
         return AskResponse(
             answer=(
                 f"Core crude flow balance was {trace.result:+,.1f} {trace.unit} as of "
-                f"{snapshot.as_of.isoformat()}, calculated as production plus imports minus "
-                "exports and refinery input. This is a partial deterministic reconciliation, "
-                "not an official EIA balance identity."
+                f"{balance_snapshot.as_of.isoformat()}, calculated as production plus imports "
+                "minus exports and refinery input. This is a partial deterministic "
+                "reconciliation, not an official EIA balance identity."
             ),
             evidence=evidence,
         )
@@ -140,23 +146,26 @@ def _deterministic_answer(question: str, observations: list[Observation]) -> Ask
     )
     if not rows:
         raise ValueError(f"no evidence available for {series_id}")
-    snapshot = build_snapshot(rows, series_id)
+    series_snapshot = build_snapshot(rows, series_id)
     current = rows[-1]
     evidence = [_citation(current)]
     change_text = "No prior observation is available."
-    if snapshot.week_over_week:
-        prior_date = min(snapshot.week_over_week.input_observation_dates)
+    if series_snapshot.week_over_week:
+        prior_date = min(series_snapshot.week_over_week.input_observation_dates)
         prior = next(row for row in rows if row.observation_date == prior_date)
         evidence = [
-            _citation(current, snapshot.week_over_week.calculation_id),
-            _citation(prior, snapshot.week_over_week.calculation_id),
+            _citation(current, series_snapshot.week_over_week.calculation_id),
+            _citation(prior, series_snapshot.week_over_week.calculation_id),
         ]
-        change = snapshot.week_over_week.result
+        change = series_snapshot.week_over_week.result
         direction = "up" if change > 0 else "down" if change < 0 else "unchanged"
-        change_text = f"That is {direction} {abs(change):,.1f} {snapshot.unit} week over week."
+        change_text = (
+            f"That is {direction} {abs(change):,.1f} "
+            f"{series_snapshot.unit} week over week."
+        )
     answer = (
-        f"{label} were {snapshot.current:,.1f} {snapshot.unit} as of "
-        f"{snapshot.as_of.isoformat()}. {change_text}"
+        f"{label} were {series_snapshot.current:,.1f} {series_snapshot.unit} as of "
+        f"{series_snapshot.as_of.isoformat()}. {change_text}"
     )
     return AskResponse(answer=answer, evidence=evidence)
 
