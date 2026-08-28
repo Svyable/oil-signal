@@ -8,6 +8,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from oilsignal.agent.commerce import (
+    PaymentGateway,
+    PaymentGatewayUnavailable,
+    PaymentProblem,
+    PaymentRejected,
+    PaymentRequirement,
+    build_payment_requirement,
+)
 from oilsignal.agent.products import (
     AgentCatalog,
     AgentQuote,
@@ -47,6 +55,20 @@ from oilsignal.reports.specialized import (
 )
 from oilsignal.reports.weekly import WeeklyPetroleumBrief
 from oilsignal.storage.datasets import DataStatus, inspect_data, load_latest_observations
+
+_RESERVED_COMMERCE_HEADERS = {
+    "cache-control",
+    "content-length",
+    "content-type",
+    "etag",
+    "vary",
+    "x-oilsignal-evidence-sha256",
+    "x-oilsignal-sku",
+    "x-oilsignal-payment-protocol",
+    "x-oilsignal-payment-reference",
+    "x-oilsignal-payment-payer",
+    "x-oilsignal-payment-external-id",
+}
 
 
 class AskRequest(BaseModel):
@@ -192,10 +214,27 @@ def _etag_matches(if_none_match: str | None, etag: str) -> bool:
     return "*" in candidates or any(_etag_opaque_value(item) == expected for item in candidates)
 
 
+def _commerce_headers(
+    protocol_headers: dict[str, str],
+    core_headers: dict[str, str],
+) -> dict[str, str]:
+    collisions = sorted(
+        key for key in protocol_headers if key.lower() in _RESERVED_COMMERCE_HEADERS
+    )
+    if collisions:
+        joined = ", ".join(collisions)
+        raise HTTPException(
+            status_code=502,
+            detail=f"payment adapter attempted to override reserved headers: {joined}",
+        )
+    return {**protocol_headers, **core_headers}
+
+
 def create_app(
     data_dir: Path | None = None,
     *,
     agent_unit_price_usd: Decimal | None = None,
+    payment_gateway: PaymentGateway | None = None,
 ) -> FastAPI:
     app = FastAPI(title="OilSignal API", version="0.2.0")
     app.state.data_dir = data_dir or settings.data_dir
@@ -204,12 +243,14 @@ def create_app(
         if agent_unit_price_usd is not None
         else settings.agent_evidence_pack_price_usd
     )
+    app.state.payment_gateway = payment_gateway
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:5173", "http://localhost:3000"],
         allow_credentials=False,
         allow_methods=["GET", "POST"],
-        allow_headers=["Content-Type"],
+        allow_headers=["*"],
+        expose_headers=["*"],
     )
 
     def current_evidence_context() -> tuple[list[Observation], DataStatus, DatasetFreshness]:
@@ -222,10 +263,79 @@ def create_app(
         observations, _, _ = current_evidence_context()
         return observations
 
+    def commerce_active() -> bool:
+        return app.state.payment_gateway is not None and app.state.agent_unit_price_usd is not None
+
+    def gateway_vary_header() -> str | None:
+        gateway = app.state.payment_gateway
+        if gateway is None or not gateway.credential_headers:
+            return None
+        return ", ".join(gateway.credential_headers)
+
     def agent_catalog() -> AgentCatalog:
-        return build_agent_catalog(
+        catalog = build_agent_catalog(
             unit_price_usd=app.state.agent_unit_price_usd,
             currency=settings.agent_price_currency,
+        )
+        if not commerce_active():
+            return catalog
+        products = [
+            product.model_copy(
+                update={
+                    "price": (
+                        product.price.model_copy(update={"enforcement": "http_402"})
+                        if product.price
+                        else None
+                    )
+                }
+            )
+            for product in catalog.products
+        ]
+        return catalog.model_copy(update={"products": products})
+
+    def payment_required_response(
+        requirement: PaymentRequirement,
+        detail: str,
+    ) -> Response:
+        gateway = app.state.payment_gateway
+        if gateway is None:
+            raise HTTPException(status_code=503, detail="payment gateway is not configured")
+        try:
+            challenge = gateway.challenge(requirement)
+        except PaymentGatewayUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if challenge.protocol != gateway.protocol:
+            raise HTTPException(
+                status_code=502,
+                detail="payment adapter returned a challenge for a different protocol",
+            )
+        problem = PaymentProblem(
+            detail=detail,
+            sku=requirement.sku,
+            amount=requirement.amount,
+            currency=requirement.currency,
+            evidence_sha256=requirement.evidence_sha256,
+            external_id=requirement.external_id,
+            resource_path=requirement.resource_path,
+            payment_protocol=challenge.protocol,
+            challenge_id=challenge.challenge_id,
+        )
+        core_headers = {
+            "Cache-Control": "no-store",
+            "X-OilSignal-Evidence-SHA256": requirement.evidence_sha256,
+            "X-OilSignal-SKU": requirement.sku,
+            "X-OilSignal-Payment-Protocol": challenge.protocol,
+            "X-OilSignal-Payment-External-ID": requirement.external_id,
+        }
+        vary = gateway_vary_header()
+        if vary:
+            core_headers["Vary"] = vary
+        headers = _commerce_headers(challenge.response_headers, core_headers)
+        return JSONResponse(
+            status_code=402,
+            content=problem.model_dump(mode="json"),
+            headers=headers,
+            media_type="application/problem+json",
         )
 
     @app.get("/health")
@@ -273,16 +383,32 @@ def create_app(
     def agent_quote(sku: str) -> AgentQuote:
         if not product_exists(sku):
             raise HTTPException(status_code=404, detail=f"unknown agent product: {sku}")
-        return quote_agent_product(
+        quote = quote_agent_product(
             sku,
             unit_price_usd=app.state.agent_unit_price_usd,
             currency=settings.agent_price_currency,
+        )
+        if not commerce_active():
+            return quote
+        gateway = app.state.payment_gateway
+        price = quote.price.model_copy(update={"enforcement": "http_402"}) if quote.price else None
+        return quote.model_copy(
+            update={
+                "price": price,
+                "payment_enforcement": "http_402",
+                "payment_protocols": [gateway.protocol],
+            }
         )
 
     @app.get(
         "/api/agent/products/{sku}/evidence",
         response_model=None,
-        responses={304: {"description": "Semantic evidence unchanged for supplied ETag"}},
+        responses={
+            304: {"description": "Semantic evidence unchanged; no payment required"},
+            402: {"description": "Payment required or supplied credential rejected"},
+            502: {"description": "Payment adapter returned inconsistent verification data"},
+            503: {"description": "Payment adapter unavailable"},
+        },
     )
     def agent_evidence(sku: str, request: Request) -> Response:
         if not product_exists(sku):
@@ -306,8 +432,51 @@ def create_app(
             "X-OilSignal-Evidence-SHA256": pack.evidence_sha256,
             "X-OilSignal-SKU": pack.sku,
         }
+        vary = gateway_vary_header()
+        if vary:
+            headers["Vary"] = vary
         if _etag_matches(request.headers.get("if-none-match"), etag):
             return Response(status_code=304, headers=headers)
+
+        gateway = app.state.payment_gateway
+        price = app.state.agent_unit_price_usd
+        if gateway is not None and price is not None:
+            requirement = build_payment_requirement(
+                sku=pack.sku,
+                amount=price,
+                currency=settings.agent_price_currency,
+                evidence_sha256=pack.evidence_sha256,
+                description=pack.title,
+            )
+            try:
+                verified = gateway.verify(dict(request.headers), requirement)
+            except PaymentRejected as exc:
+                return payment_required_response(requirement, exc.detail)
+            except PaymentGatewayUnavailable as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            if verified.protocol != gateway.protocol:
+                raise HTTPException(
+                    status_code=502,
+                    detail="payment adapter returned a receipt for a different protocol",
+                )
+            if verified.external_id != requirement.external_id:
+                raise HTTPException(
+                    status_code=502,
+                    detail="payment adapter returned a receipt for a different evidence requirement",
+                )
+            payment_headers = {
+                "X-OilSignal-Payment-Protocol": verified.protocol,
+                "X-OilSignal-Payment-External-ID": verified.external_id,
+            }
+            if verified.reference:
+                payment_headers["X-OilSignal-Payment-Reference"] = verified.reference
+            if verified.payer:
+                payment_headers["X-OilSignal-Payment-Payer"] = verified.payer
+            headers = _commerce_headers(
+                verified.response_headers,
+                {**headers, **payment_headers},
+            )
+
         return JSONResponse(content=pack.model_dump(mode="json"), headers=headers)
 
     @app.get("/api/reports/weekly", response_model=Report)
