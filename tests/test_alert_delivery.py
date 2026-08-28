@@ -162,7 +162,7 @@ def test_webhook_delivery_sends_stable_idempotency_and_auth_headers(data_dir: Pa
     assert captured["signature"] == f"sha256={expected}"
 
 
-def test_webhook_failure_enters_retry_path_without_leaking_auth_token(data_dir: Path) -> None:
+def test_webhook_failure_enters_retry_path_without_leaking_secrets(data_dir: Path) -> None:
     metadata_path, _ = _enqueue(data_dir)
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -170,7 +170,7 @@ def test_webhook_failure_enters_retry_path_without_leaking_auth_token(data_dir: 
         return httpx.Response(503, text="temporarily unavailable")
 
     adapter = WebhookOutboxDelivery(
-        "https://alerts.example.test/oilsignal",
+        "https://alerts.example.test/oilsignal?token=url-secret",
         bearer_token="super-secret-token",
         transport=httpx.MockTransport(handler),
     )
@@ -189,9 +189,9 @@ def test_webhook_failure_enters_retry_path_without_leaking_auth_token(data_dir: 
     )
 
     assert receipts[0].status == "dead_letter"
-    assert receipts[0].error is not None
-    assert "503" in receipts[0].error
+    assert receipts[0].error == "webhook returned HTTP 503"
     assert "super-secret-token" not in receipts[0].error
+    assert "url-secret" not in receipts[0].error
 
 
 def test_webhook_rejects_embedded_url_credentials() -> None:
