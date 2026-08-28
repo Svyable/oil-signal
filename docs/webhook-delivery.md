@@ -80,9 +80,58 @@ export OILSIGNAL_ALERT_WEBHOOK_URL='http://localhost:9000/oilsignal'
 export OILSIGNAL_ALERT_WEBHOOK_ALLOW_INSECURE_HTTP=true
 ```
 
-## Receiver response contract
+## Response and retry contract
 
-Any 2xx response acknowledges delivery. Redirects are not followed automatically. Non-2xx responses and transport failures enter the existing retry/backoff/dead-letter path.
+Any 2xx response acknowledges delivery. Redirects are not followed automatically.
+
+Webhook failures are classified before they mutate the outbox:
+
+| Response/failure | OilSignal behavior |
+| --- | --- |
+| `2xx` | delivered |
+| transport/request failure | retryable |
+| `408 Request Timeout` | retryable |
+| `425 Too Early` | retryable |
+| `429 Too Many Requests` | retryable |
+| `5xx` | retryable |
+| other `3xx` / `4xx` | permanent; dead-letter immediately |
+
+The permanent classification deliberately prevents repeated attempts for conditions such as bad authentication, invalid payloads, removed endpoints, or disabled redirect targets. Operators can fix the receiver/configuration and explicitly requeue the dead letter.
+
+Retryable failures still consume the normal attempt budget. A retryable failure can therefore end in `dead_letter` when `--max-attempts` is exhausted; its receipt remains marked `retryable: true` to distinguish "temporary class, budget exhausted" from a permanent first-attempt rejection.
+
+## `Retry-After`
+
+For retryable responses, OilSignal recognizes the standard `Retry-After` header in both forms defined by HTTP semantics:
+
+```text
+Retry-After: 120
+Retry-After: Fri, 28 Aug 2026 13:30:00 GMT
+```
+
+Relevant standards:
+
+- RFC 9110 §10.2.3: <https://www.rfc-editor.org/rfc/rfc9110.html#section-10.2.3>
+- RFC 6585 §4 (`429 Too Many Requests`): <https://www.rfc-editor.org/rfc/rfc6585.html#section-4>
+
+A provider delay is persisted in an additive `AlertRetryScheduleRow` table keyed by `outbox_id`. The existing outbox table is not altered, so existing self-hosted SQLite databases do not require a column migration for this feature.
+
+Provider scheduling and OilSignal's exponential backoff are both minimum-delay constraints. A row is eligible only when **both** are due, so the later effective retry time wins.
+
+Provider retry hints are capped to one day by default:
+
+```bash
+oilsignal alerts-deliver \
+  --adapter webhook \
+  --max-retry-after-seconds 86400 \
+  --data-dir ./data
+```
+
+Set `--max-retry-after-seconds 0` to ignore provider retry hints while retaining OilSignal's ordinary exponential backoff.
+
+Malformed `Retry-After` values are ignored rather than failing the worker. Provider schedules are removed after successful delivery, permanent dead-lettering, attempt-budget dead-lettering, or explicit operator requeue.
+
+## Receiver responsibilities
 
 A receiver should:
 
@@ -91,7 +140,9 @@ A receiver should:
 3. read `Idempotency-Key` / `X-OilSignal-Outbox-ID`;
 4. atomically deduplicate the outbox ID with the receiver-side effect;
 5. return 2xx for both first processing and recognized duplicates;
-6. return a non-2xx status for retryable or permanent processing failures according to its own policy.
+6. return `429` or an appropriate `5xx` for genuinely retryable failures;
+7. include `Retry-After` when the receiver knows a useful minimum delay;
+8. return a permanent `4xx` when replaying the identical request cannot succeed without operator/configuration changes.
 
 OilSignal stores bounded delivery errors, but authentication secrets are never inserted into the request URL and are not included in normal HTTP error messages.
 
