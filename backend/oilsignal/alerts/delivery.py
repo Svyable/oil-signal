@@ -3,7 +3,8 @@ from __future__ import annotations
 import hmac
 import os
 import socket
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import Protocol
@@ -34,8 +35,25 @@ class ConsoleOutboxDelivery:
         print(payload_json)
 
 
-class WebhookDeliveryError(RuntimeError):
-    """Sanitized network/provider failure safe to persist in delivery metadata."""
+class DeliveryAttemptError(RuntimeError):
+    """Adapter failure with explicit retry semantics safe for the outbox worker."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool,
+        retry_after_seconds: int | None = None,
+        retry_at: datetime | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+        self.retry_after_seconds = retry_after_seconds
+        self.retry_at = retry_at
+
+
+class WebhookDeliveryError(DeliveryAttemptError):
+    """Sanitized webhook failure safe to persist in delivery metadata."""
 
 
 class WebhookOutboxDelivery:
@@ -95,15 +113,26 @@ class WebhookOutboxDelivery:
                     content=payload_json.encode(),
                     headers=headers,
                 )
-                response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
+        except httpx.RequestError as exc:
             raise WebhookDeliveryError(
-                f"webhook returned HTTP {exc.response.status_code}"
+                f"webhook transport failed: {exc.__class__.__name__}",
+                retryable=True,
             ) from None
-        except httpx.HTTPError as exc:
-            raise WebhookDeliveryError(
-                f"webhook transport failed: {exc.__class__.__name__}"
-            ) from None
+
+        if 200 <= response.status_code < 300:
+            return
+
+        retryable = _is_retryable_webhook_status(response.status_code)
+        retry_after_seconds: int | None = None
+        retry_at: datetime | None = None
+        if retryable:
+            retry_after_seconds, retry_at = _parse_retry_after(response.headers.get("Retry-After"))
+        raise WebhookDeliveryError(
+            f"webhook returned HTTP {response.status_code}",
+            retryable=retryable,
+            retry_after_seconds=retry_after_seconds,
+            retry_at=retry_at,
+        )
 
 
 class DeliveryPolicy(BaseModel):
@@ -111,6 +140,7 @@ class DeliveryPolicy(BaseModel):
     max_attempts: int = Field(default=5, ge=1)
     base_backoff_seconds: int = Field(default=30, ge=0)
     max_backoff_seconds: int = Field(default=3600, ge=0)
+    max_retry_after_seconds: int = Field(default=86400, ge=0)
 
     @model_validator(mode="after")
     def validate_backoff(self) -> DeliveryPolicy:
@@ -128,6 +158,8 @@ class DeliveryReceipt(BaseModel):
     attempts: int
     attempted_at: datetime
     delivered_at: datetime | None = None
+    retryable: bool | None = None
+    retry_at: datetime | None = None
     error: str | None = None
 
 
@@ -140,7 +172,7 @@ def flush_alert_outbox(
     policy: DeliveryPolicy | None = None,
     now: datetime | None = None,
 ) -> list[DeliveryReceipt]:
-    """Drain eligible outbox rows with leases, exponential backoff, and dead-lettering."""
+    """Drain eligible outbox rows with leases, retry classification, and dead-lettering."""
 
     if limit < 1:
         raise ValueError("delivery limit must be positive")
@@ -165,13 +197,30 @@ def flush_alert_outbox(
 
         error: str | None = None
         delivered = False
+        retryable: bool | None = None
+        delivery_error: DeliveryAttemptError | None = None
         try:
             adapter.send(claimed.payload_json, idempotency_key=claimed.id)
             delivered = True
+        except DeliveryAttemptError as exc:
+            delivery_error = exc
+            retryable = exc.retryable
+            error = str(exc)[:1000] or exc.__class__.__name__
         except Exception as exc:
+            retryable = True
             error = str(exc)[:1000] or exc.__class__.__name__
 
         completed_at = now or datetime.now(UTC)
+        retry_at = (
+            _bounded_retry_at(
+                delivery_error,
+                now=completed_at,
+                max_retry_after_seconds=delivery_policy.max_retry_after_seconds,
+            )
+            if delivery_error is not None and delivery_error.retryable
+            else None
+        )
+        permanent_failure = delivery_error is not None and not delivery_error.retryable
         try:
             completed = complete_alert_delivery(
                 metadata_path,
@@ -181,12 +230,17 @@ def flush_alert_outbox(
                 delivered=delivered,
                 max_attempts=delivery_policy.max_attempts,
                 error=error,
+                permanent_failure=permanent_failure,
+                retry_at=retry_at,
             )
             status = completed.status
             delivered_at = completed.delivered_at
+            if status != "failed":
+                retry_at = None
         except AlertLeaseLostError as exc:
             status = "lease_lost"
             delivered_at = None
+            retry_at = None
             error = str(exc)
 
         receipts.append(
@@ -199,6 +253,8 @@ def flush_alert_outbox(
                 attempts=claimed.attempts,
                 attempted_at=attempted_at,
                 delivered_at=delivered_at,
+                retryable=retryable,
+                retry_at=retry_at,
                 error=error,
             )
         )
@@ -207,3 +263,43 @@ def flush_alert_outbox(
 
 def default_worker_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}:{uuid4().hex[:8]}"
+
+
+def _is_retryable_webhook_status(status_code: int) -> bool:
+    return status_code in {408, 425, 429} or 500 <= status_code < 600
+
+
+def _parse_retry_after(value: str | None) -> tuple[int | None, datetime | None]:
+    if value is None:
+        return None, None
+    candidate = value.strip()
+    if not candidate:
+        return None, None
+    if candidate.isdigit():
+        return int(candidate), None
+    try:
+        parsed = parsedate_to_datetime(candidate)
+    except (TypeError, ValueError, OverflowError):
+        return None, None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return None, parsed.astimezone(UTC)
+
+
+def _bounded_retry_at(
+    error: DeliveryAttemptError,
+    *,
+    now: datetime,
+    max_retry_after_seconds: int,
+) -> datetime | None:
+    if max_retry_after_seconds == 0:
+        return None
+    requested: datetime | None = None
+    if error.retry_after_seconds is not None:
+        requested = now + timedelta(seconds=error.retry_after_seconds)
+    elif error.retry_at is not None:
+        requested = max(error.retry_at.astimezone(UTC), now)
+    if requested is None:
+        return None
+    cap = now + timedelta(seconds=max_retry_after_seconds)
+    return min(requested, cap)
