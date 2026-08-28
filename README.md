@@ -19,6 +19,8 @@ flowchart LR
     CALC --> CLAIM[Typed claims + citations]
     CLAIM --> GATE[Claim validator]
     GATE --> BRIEF[Briefs / composite alerts / Q&A]
+    BRIEF --> PACK[Agent Evidence Packs]
+    PACK --> COMMERCE[Quote / external payment wrapper]
     BRIEF --> UI[React dashboard]
     BRIEF --> OUTBOX[Transactional alert outbox]
     OUTBOX --> LEASE[Worker lease + backoff]
@@ -43,10 +45,11 @@ A model can help explain evidence, but it is never the source of truth. OilSigna
 - Structured `CalculationTrace`, `Citation`, `Claim`, and `Report` models.
 - Claim validator that rejects uncited market claims and unlinked calculation claims.
 - Weekly Petroleum Brief, Distillate Supply Risk Brief, Refinery Utilization Watch, and Crude Balance Watch; live briefs opportunistically include the broader maintained fundamentals set.
+- Agent-native Evidence Pack SKUs with well-known discovery, configurable quote metadata, claim/calculation fingerprints, cited raw-source hashes, stable semantic SHA-256 digests, and weak ETag/304 cache revalidation.
 - Single-signal threshold rules plus composite `all`/`any` alert policies with per-condition audit traces.
 - Edge-triggered alert state with recovery/re-arm behavior and duplicate suppression.
 - Transactional alert outbox with at-least-once delivery, local multi-worker leases, bounded exponential backoff, dead-letter history, requeue, and delivery receipts.
-- FastAPI report, alert-evaluation, readiness, and cited Q&A endpoints.
+- FastAPI report, alert-evaluation, readiness, agent-product, and cited Q&A endpoints.
 - React/Vite dashboard showing claims and the evidence table.
 - Optional OpenAI-compatible LLM client for local or hosted endpoints.
 - Docker Compose, pytest, Ruff, mypy, pre-commit, and GitHub Actions.
@@ -65,6 +68,7 @@ Open:
 
 - Dashboard: `http://localhost:3000`
 - FastAPI docs: `http://localhost:8000/docs`
+- Agent product discovery: `http://localhost:8000/.well-known/oilsignal-agent.json`
 - Liveness: `http://localhost:8000/health`
 - Data readiness: `http://localhost:8000/health/ready`
 
@@ -138,7 +142,7 @@ The verifier checks every route independently and returns a complete audit rathe
 
 OilSignal retains raw JSON per configured series, hashes source payloads into observations, and stores public dataset URLs without the API key. If EIA reports more rows than were returned, ingestion fails rather than accepting silently truncated history.
 
-For live EIA runs, report, Q&A, and alert paths fail closed when the latest weekly evidence trails the expected WPSR week after the configured publication time plus the two-hour API grace window. Synthetic fixture runs are explicitly excluded from the live freshness gate by ingestion provenance. See [`docs/eia-setup.md`](docs/eia-setup.md) and [`docs/freshness.md`](docs/freshness.md).
+For live EIA runs, report, Q&A, alert, and agent Evidence Pack paths fail closed when the latest weekly evidence trails the expected WPSR week after the configured publication time plus the two-hour API grace window. Synthetic fixture runs are explicitly excluded from the live freshness gate by ingestion provenance. See [`docs/eia-setup.md`](docs/eia-setup.md) and [`docs/freshness.md`](docs/freshness.md).
 
 ## Reports and API examples
 
@@ -178,6 +182,36 @@ curl -X POST http://localhost:8000/api/ask \
 ```
 
 The response contains both `answer` and structured `evidence` objects. Explicit crude production, export, refinery-input, and crude-balance questions route to the corresponding maintained evidence rather than an inventory substitute.
+
+## Agent-native Evidence Packs
+
+OilSignal packages its deterministic intelligence into stable machine products instead of requiring another agent to scrape the dashboard or reverse-engineer report prose.
+
+Discover the catalog:
+
+```bash
+curl http://localhost:8000/.well-known/oilsignal-agent.json
+```
+
+Advertise a per-pack price without claiming a payment rail is installed:
+
+```bash
+export OILSIGNAL_AGENT_EVIDENCE_PACK_PRICE_USD='0.05'
+export OILSIGNAL_AGENT_PRICE_CURRENCY='USD'
+curl http://localhost:8000/api/agent/products/weekly-petroleum-evidence/quote
+```
+
+Fulfill the evidence product:
+
+```bash
+curl -i http://localhost:8000/api/agent/products/weekly-petroleum-evidence/evidence
+```
+
+The response carries a weak semantic `ETag` (`W/"sha256:..."`), `X-OilSignal-Evidence-SHA256`, and `X-OilSignal-SKU`. A buyer can send the previous ETag via `If-None-Match`; unchanged semantic evidence returns `304 Not Modified` with no body. The separate SHA-256 header remains the stable evidence-integrity fingerprint even though runtime fields in the JSON representation can change between equivalent fetches.
+
+An Evidence Pack includes stable claim/calculation fingerprints, only the observations needed by its citations, each cited observation's ingestion `raw_hash`, release-aware freshness state, and a semantic `evidence_sha256`. Runtime timestamps and random internal report IDs do not perturb that digest.
+
+Payment enforcement is deliberately external to the community core. A hosted deployment can put HTTP 402/x402/MPP, credits, or another gateway in front of the same fulfillment endpoint and bind a payment receipt to the returned evidence digest. OilSignal does not advertise a payment protocol until one is actually configured. See [`docs/agent-products.md`](docs/agent-products.md).
 
 ## Composite alerts and worker delivery
 
@@ -240,7 +274,7 @@ Email/Slack/Teams implementations can plug into the same adapter/outbox boundary
 
 ```text
 backend/oilsignal/
-├── agent/          # typed tools, validator, optional LLM client
+├── agent/          # typed tools, validator, evidence products, optional LLM client
 ├── alerts/         # threshold/composite rules, edge state, leased delivery
 ├── analytics/      # deterministic petroleum time-series + crude-flow reconciliation
 ├── api/            # FastAPI endpoints
@@ -251,7 +285,7 @@ backend/oilsignal/
 frontend/           # React + TypeScript + Vite
 examples/           # offline ingestion, maintained EIA registry, alert policies
 tests/              # network-free fixtures and acceptance tests
-docs/               # architecture, provenance, freshness, balance semantics, safety
+docs/               # architecture, provenance, freshness, balance, agent products, safety
 ```
 
 ## Safety and product boundary
@@ -260,16 +294,17 @@ OilSignal v1 is for **operational decision support**. It deliberately excludes o
 
 ## Open core
 
-Community code is Apache-2.0 with no artificial feature lockouts. A commercial hosted product can charge for reliability, scheduled delivery, organization workspaces, SSO/RBAC, private/vendor data connectors, managed retention, VPC/on-prem deployment, and enterprise support. See [`docs/open-core.md`](docs/open-core.md).
+Community code is Apache-2.0 with no artificial feature lockouts. A commercial hosted product can charge for reliability, scheduled delivery, organization workspaces, SSO/RBAC, private/vendor data connectors, managed retention, agent Evidence Pack fulfillment/payment infrastructure, VPC/on-prem deployment, and enterprise support. See [`docs/open-core.md`](docs/open-core.md).
 
 ## Roadmap
 
-1. Expand verified PADD crude/product coverage and add more explicit supply-disposition components without weakening canonical-series or citation contracts.
-2. Generalize release calendars and freshness policies beyond WPSR-backed weekly series.
-3. Add production email/Slack/Teams adapters with provider idempotency and a distributed hosted worker backend.
-4. Expand the evaluation suite for claim coverage, citation accuracy, balance reconciliation, alert reproducibility, freshness behavior, and explanation faithfulness.
-5. Add optional private connectors and organization knowledge boundaries.
-6. Add facility/emissions intelligence using public EPA data after the fundamentals workflow is mature.
+1. Add provider-neutral HTTP 402 payment enforcement for agent Evidence Packs, with receipts bound to `evidence_sha256`, while keeping the deterministic product schema payment-rail independent.
+2. Add agent-native delta/event products so buyers can purchase only new petroleum changes instead of repeatedly consuming a full weekly pack.
+3. Expand verified PADD crude/product coverage and add more explicit supply-disposition components without weakening canonical-series or citation contracts.
+4. Generalize release calendars and freshness policies beyond WPSR-backed weekly series.
+5. Expand the evaluation suite for claim coverage, citation accuracy, balance reconciliation, alert reproducibility, freshness behavior, and explanation faithfulness.
+6. Add optional private connectors and organization knowledge boundaries.
+7. Add facility/emissions intelligence using public EPA data after the fundamentals workflow is mature.
 
 ## License
 

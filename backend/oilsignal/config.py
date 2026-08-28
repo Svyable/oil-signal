@@ -1,3 +1,4 @@
+from decimal import Decimal
 from pathlib import Path
 
 from pydantic import Field, SecretStr
@@ -20,6 +21,8 @@ class Settings(BaseSettings):
     alert_webhook_signing_secret: SecretStr | None = None
     alert_webhook_timeout_seconds: float = Field(default=10.0, gt=0)
     alert_webhook_allow_insecure_http: bool = False
+    agent_evidence_pack_price_usd: Decimal | None = Field(default=None, ge=0)
+    agent_price_currency: str = Field(default="USD", min_length=3, max_length=3)
 
     @property
     def parquet_dir(self) -> Path:
