@@ -5,7 +5,6 @@ from pathlib import Path
 
 import httpx
 import pytest
-
 from oilsignal.alerts.delivery import (
     DeliveryPolicy,
     WebhookOutboxDelivery,
