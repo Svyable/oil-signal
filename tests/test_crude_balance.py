@@ -1,7 +1,6 @@
 from datetime import UTC, date, datetime
 
 import pytest
-
 from oilsignal.analytics.crude_balance import build_crude_balance
 from oilsignal.models import Observation
 from oilsignal.reports.specialized import CrudeBalanceWatch
