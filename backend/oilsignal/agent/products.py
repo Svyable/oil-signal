@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from hashlib import sha256
-from typing import Callable
 
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -339,16 +339,26 @@ def _evidence_claim(
 
 
 def _evidence_calculation(trace: CalculationTrace) -> EvidenceCalculation:
+    input_dates = [item.isoformat() for item in trace.input_observation_dates]
     semantics = {
         "operation": trace.operation,
         "expression": trace.expression,
         "input_series_ids": trace.input_series_ids,
-        "input_observation_dates": [item.isoformat() for item in trace.input_observation_dates],
+        "input_observation_dates": input_dates,
         "inputs": trace.inputs,
         "result": trace.result,
         "unit": trace.unit,
     }
-    return EvidenceCalculation(fingerprint=_fingerprint(semantics), **semantics)
+    return EvidenceCalculation(
+        fingerprint=_fingerprint(semantics),
+        operation=trace.operation,
+        expression=trace.expression,
+        input_series_ids=trace.input_series_ids,
+        input_observation_dates=input_dates,
+        inputs=trace.inputs,
+        result=trace.result,
+        unit=trace.unit,
+    )
 
 
 def _evidence_observation(row: Observation) -> EvidenceObservation:
