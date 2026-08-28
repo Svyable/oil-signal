@@ -200,6 +200,17 @@ def test_webhook_rejects_embedded_url_credentials() -> None:
         WebhookOutboxDelivery("https://user:secret@example.test/hook")
 
 
+def test_webhook_requires_https_unless_explicitly_overridden() -> None:
+    with pytest.raises(ValueError, match="must use https"):
+        WebhookOutboxDelivery("http://alerts.example.test/hook")
+
+    adapter = WebhookOutboxDelivery(
+        "http://localhost:9000/hook",
+        allow_insecure_http=True,
+    )
+    assert adapter.endpoint == "http://localhost:9000/hook"
+
+
 def test_active_lease_prevents_second_worker_from_claiming_same_row(data_dir: Path) -> None:
     metadata_path, outbox_id = _enqueue(data_dir)
     kwargs = {
