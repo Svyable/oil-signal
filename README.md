@@ -20,7 +20,7 @@ flowchart LR
     CLAIM --> GATE[Claim validator]
     GATE --> BRIEF[Briefs / composite alerts / Q&A]
     BRIEF --> PACK[Agent Evidence Packs]
-    PACK --> COMMERCE[Quote / external payment wrapper]
+    PACK --> COMMERCE[Evidence-bound HTTP 402 gateway]
     BRIEF --> UI[React dashboard]
     BRIEF --> OUTBOX[Transactional alert outbox]
     OUTBOX --> LEASE[Worker lease + backoff]
@@ -46,6 +46,7 @@ A model can help explain evidence, but it is never the source of truth. OilSigna
 - Claim validator that rejects uncited market claims and unlinked calculation claims.
 - Weekly Petroleum Brief, Distillate Supply Risk Brief, Refinery Utilization Watch, and Crude Balance Watch; live briefs opportunistically include the broader maintained fundamentals set.
 - Agent-native Evidence Pack SKUs with well-known discovery, configurable quote metadata, claim/calculation fingerprints, cited raw-source hashes, stable semantic SHA-256 digests, and weak ETag/304 cache revalidation.
+- Protocol/header-neutral HTTP 402 orchestration with payment requirements bound to `evidence_sha256`, adapter-owned credential/challenge/receipt headers, receipt-binding checks, protected provenance headers, and free unchanged-data revalidation before payment verification.
 - Single-signal threshold rules plus composite `all`/`any` alert policies with per-condition audit traces.
 - Edge-triggered alert state with recovery/re-arm behavior and duplicate suppression.
 - Transactional alert outbox with at-least-once delivery, local multi-worker leases, bounded exponential backoff, dead-letter history, requeue, and delivery receipts.
@@ -193,7 +194,7 @@ Discover the catalog:
 curl http://localhost:8000/.well-known/oilsignal-agent.json
 ```
 
-Advertise a per-pack price without claiming a payment rail is installed:
+Advertise a per-pack price:
 
 ```bash
 export OILSIGNAL_AGENT_EVIDENCE_PACK_PRICE_USD='0.05'
@@ -201,17 +202,23 @@ export OILSIGNAL_AGENT_PRICE_CURRENCY='USD'
 curl http://localhost:8000/api/agent/products/weekly-petroleum-evidence/quote
 ```
 
+A price alone remains metadata and does **not** gate the open-core endpoint. HTTP 402 enforcement activates only when the application is constructed with a real `PaymentGateway` adapter in addition to a price. The default `app = create_app()` has no gateway and does not pretend to settle money.
+
 Fulfill the evidence product:
 
 ```bash
 curl -i http://localhost:8000/api/agent/products/weekly-petroleum-evidence/evidence
 ```
 
-The response carries a weak semantic `ETag` (`W/"sha256:..."`), `X-OilSignal-Evidence-SHA256`, and `X-OilSignal-SKU`. A buyer can send the previous ETag via `If-None-Match`; unchanged semantic evidence returns `304 Not Modified` with no body. The separate SHA-256 header remains the stable evidence-integrity fingerprint even though runtime fields in the JSON representation can change between equivalent fetches.
+The response carries a weak semantic `ETag` (`W/"sha256:..."`), `X-OilSignal-Evidence-SHA256`, and `X-OilSignal-SKU`. A buyer can send the previous ETag via `If-None-Match`; unchanged semantic evidence returns `304 Not Modified` with no body **before payment verification**. This gives agents a useful rule: poll free, pay only when the semantic intelligence changed.
 
 An Evidence Pack includes stable claim/calculation fingerprints, only the observations needed by its citations, each cited observation's ingestion `raw_hash`, release-aware freshness state, and a semantic `evidence_sha256`. Runtime timestamps and random internal report IDs do not perturb that digest.
 
-Payment enforcement is deliberately external to the community core. A hosted deployment can put HTTP 402/x402/MPP, credits, or another gateway in front of the same fulfillment endpoint and bind a payment receipt to the returned evidence digest. OilSignal does not advertise a payment protocol until one is actually configured. See [`docs/agent-products.md`](docs/agent-products.md).
+When commerce is active, OilSignal validates/builds the fresh pack first and derives a payment operation ID from the exact SKU and digest: `oilsignal:<sku>:sha256:<evidence_sha256>`. A rejected credential returns a 402 problem body without purchased claims/observations. The adapter owns its own payment headers, verification, settlement, and replay protection; OilSignal requires a successful receipt to echo the same evidence-bound operation ID before serving the pack.
+
+The gateway interface is header-neutral. Tests exercise both MPP-shaped headers (`WWW-Authenticate` / `Authorization` / `Payment-Receipt`) and x402-v2-shaped headers (`PAYMENT-REQUIRED` / `PAYMENT-SIGNATURE` / `PAYMENT-RESPONSE`) without baking either protocol into the evidence layer. These are adapter-shape tests, not bundled production payment providers.
+
+See [`docs/agent-products.md`](docs/agent-products.md) and [`docs/payment-gateways.md`](docs/payment-gateways.md).
 
 ## Composite alerts and worker delivery
 
@@ -274,7 +281,7 @@ Email/Slack/Teams implementations can plug into the same adapter/outbox boundary
 
 ```text
 backend/oilsignal/
-├── agent/          # typed tools, validator, evidence products, optional LLM client
+├── agent/          # typed tools, evidence products/commerce, validator, optional LLM client
 ├── alerts/         # threshold/composite rules, edge state, leased delivery
 ├── analytics/      # deterministic petroleum time-series + crude-flow reconciliation
 ├── api/            # FastAPI endpoints
@@ -285,7 +292,7 @@ backend/oilsignal/
 frontend/           # React + TypeScript + Vite
 examples/           # offline ingestion, maintained EIA registry, alert policies
 tests/              # network-free fixtures and acceptance tests
-docs/               # architecture, provenance, freshness, balance, agent products, safety
+docs/               # architecture, provenance, freshness, balance, agent products/payments, safety
 ```
 
 ## Safety and product boundary
@@ -298,7 +305,7 @@ Community code is Apache-2.0 with no artificial feature lockouts. A commercial h
 
 ## Roadmap
 
-1. Add provider-neutral HTTP 402 payment enforcement for agent Evidence Packs, with receipts bound to `evidence_sha256`, while keeping the deterministic product schema payment-rail independent.
+1. Add real hosted payment adapters (for example MPP/x402/provider-backed credits) with protocol-specific settlement, replay protection, and durable purchase/receipt audit storage while keeping the Evidence Pack schema rail-independent.
 2. Add agent-native delta/event products so buyers can purchase only new petroleum changes instead of repeatedly consuming a full weekly pack.
 3. Expand verified PADD crude/product coverage and add more explicit supply-disposition components without weakening canonical-series or citation contracts.
 4. Generalize release calendars and freshness policies beyond WPSR-backed weekly series.
