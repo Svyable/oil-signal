@@ -20,7 +20,11 @@ from oilsignal.data_ingestion.registry import SeriesRegistry
 from oilsignal.data_ingestion.verification import verify_eia_registry
 from oilsignal.freshness import FreshnessState, check_wpsr_freshness, require_fresh_wpsr
 from oilsignal.reports.renderers import render_report
-from oilsignal.reports.specialized import DistillateSupplyRiskBrief, RefineryUtilizationWatch
+from oilsignal.reports.specialized import (
+    CrudeBalanceWatch,
+    DistillateSupplyRiskBrief,
+    RefineryUtilizationWatch,
+)
 from oilsignal.reports.weekly import WeeklyPetroleumBrief
 from oilsignal.storage.datasets import inspect_data, load_latest_observations
 from oilsignal.storage.metadata import list_alert_dead_letters, requeue_alert_dead_letter
@@ -59,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     report = subparsers.add_parser("report", help="render a deterministic cited report")
     report.add_argument(
         "--type",
-        choices=["weekly", "distillate", "refinery-utilization"],
+        choices=["weekly", "distillate", "refinery-utilization", "crude-balance"],
         default="weekly",
     )
     report.add_argument("--format", choices=["markdown", "html", "json"], default="markdown")
@@ -183,6 +187,7 @@ def _report(report_type: str, output_format: str, data_dir: Path) -> int:
         "weekly": WeeklyPetroleumBrief(),
         "distillate": DistillateSupplyRiskBrief(),
         "refinery-utilization": RefineryUtilizationWatch(),
+        "crude-balance": CrudeBalanceWatch(),
     }
     observations = load_latest_observations(data_dir)
     status = inspect_data(data_dir)
