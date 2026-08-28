@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "verified_at": "2026-08-26",
-  "note": "Verified public EIA weekly petroleum mappings as of 2026-08-26. Uses EIA API v2's documented /seriesid/ compatibility route so each request resolves one legacy weekly series without ambiguous facets.",
+  "verified_at": "2026-08-27",
+  "note": "Maintained public EIA weekly petroleum mappings verified against EIA history pages through 2026-08-27. Uses EIA API v2's documented /seriesid/ compatibility route so each request resolves one legacy weekly series without ambiguous facets.",
   "series": [
     {
       "canonical_series_id": "PET.CRDUUS.W",
@@ -116,6 +116,57 @@
       "release_family": "wpsr",
       "request": {
         "route": "seriesid/PET.WCRIMUS2.W",
+        "frequency": "weekly",
+        "data": ["value"],
+        "facets": {},
+        "length": 5000
+      }
+    },
+    {
+      "canonical_series_id": "PET.CRPRODUS.W",
+      "metric": "production",
+      "product": "crude oil",
+      "geography": "US",
+      "unit": "thousand barrels per day",
+      "period_field": "period",
+      "value_field": "value",
+      "release_family": "wpsr",
+      "request": {
+        "route": "seriesid/PET.WCRFPUS2.W",
+        "frequency": "weekly",
+        "data": ["value"],
+        "facets": {},
+        "length": 5000
+      }
+    },
+    {
+      "canonical_series_id": "PET.CREXUS.W",
+      "metric": "exports",
+      "product": "crude oil",
+      "geography": "US",
+      "unit": "thousand barrels per day",
+      "period_field": "period",
+      "value_field": "value",
+      "release_family": "wpsr",
+      "request": {
+        "route": "seriesid/PET.WCREXUS2.W",
+        "frequency": "weekly",
+        "data": ["value"],
+        "facets": {},
+        "length": 5000
+      }
+    },
+    {
+      "canonical_series_id": "PET.CRINUS.W",
+      "metric": "refinery_input",
+      "product": "crude oil",
+      "geography": "US",
+      "unit": "thousand barrels per day",
+      "period_field": "period",
+      "value_field": "value",
+      "release_family": "wpsr",
+      "request": {
+        "route": "seriesid/PET.WCRRIUS2.W",
         "frequency": "weekly",
         "data": ["value"],
         "facets": {},
