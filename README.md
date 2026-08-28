@@ -2,7 +2,7 @@
 
 > **An evidence-first agent for U.S. petroleum fundamentals.** Ingest public oil data, calculate what changed, and generate operational briefs where every market claim carries its evidence.
 
-OilSignal is open-source decision-support software for fuel procurement teams, regional marketers, storage/terminal operators, consultants, and analysts who need a fast, auditable explanation of crude, product inventory, refinery, import, and demand changes. It is **not** a trading bot, does not execute trades, and does not provide price predictions or investment recommendations.
+OilSignal is open-source decision-support software for fuel procurement teams, regional marketers, storage/terminal operators, consultants, and analysts who need a fast, auditable explanation of crude, product inventory, refinery, import/export, production, and demand changes. It is **not** a trading bot, does not execute trades, and does not provide price predictions or investment recommendations.
 
 ![Dashboard placeholder](https://placehold.co/1200x650/0b0f12/77d7b9?text=OilSignal+dashboard+%E2%80%94+replace+with+real+screenshot)
 
@@ -31,7 +31,7 @@ A model can help explain evidence, but it is never the source of truth. OilSigna
 
 - Typed petroleum observations with source URL, series ID, observation date, fetch time, and raw SHA-256.
 - Idempotent offline fixture ingestion and configurable live EIA v2 ingestion into Parquet with SQLModel run metadata.
-- A maintained weekly EIA registry for crude, gasoline, distillate, PADD 2 distillate, jet fuel, refinery utilization, crude imports, and national gasoline/distillate/jet/total-product-supplied demand proxies.
+- A maintained weekly EIA registry for crude stocks, field production, imports, exports, refinery crude input, gasoline, distillate, PADD 2 distillate, jet fuel, refinery utilization, and national gasoline/distillate/jet/total-product-supplied demand proxies.
 - Executable EIA registry verification that probes every configured route, validates sample shape/numeric data, captures API warnings/version, and optionally enforces WPSR recency.
 - A scheduled/manual GitHub workflow for live registry verification when repository secret `EIA_API_KEY` is configured.
 - EIA route/facet discovery CLI for extending and re-verifying mappings.
@@ -39,9 +39,10 @@ A model can help explain evidence, but it is never the source of truth. OilSigna
 - Release-calendar-aware WPSR freshness checks with a two-hour EIA API grace window and explicit holiday overrides.
 - Provenance-aware live/fixture discrimination so synthetic development data is never treated as a live WPSR feed.
 - Transparent week-over-week, four-week average, year-over-year, seasonal-range, and z-score calculations.
+- A cited Crude Balance Watch that aligns production/import/export/refinery-input weeks, computes a transparent core-flow balance, converts commercial-stock change to a daily-equivalent rate, and exposes the remaining other/adjustment residual without claiming an official EIA balance identity.
 - Structured `CalculationTrace`, `Citation`, `Claim`, and `Report` models.
 - Claim validator that rejects uncited market claims and unlinked calculation claims.
-- Weekly Petroleum Brief, Distillate Supply Risk Brief, and Refinery Utilization Watch in JSON, Markdown, and HTML; live briefs opportunistically include the broader maintained fundamentals set.
+- Weekly Petroleum Brief, Distillate Supply Risk Brief, Refinery Utilization Watch, and Crude Balance Watch; live briefs opportunistically include the broader maintained fundamentals set.
 - Single-signal threshold rules plus composite `all`/`any` alert policies with per-condition audit traces.
 - Edge-triggered alert state with recovery/re-arm behavior and duplicate suppression.
 - Transactional alert outbox with at-least-once delivery, local multi-worker leases, bounded exponential backoff, dead-letter history, requeue, and delivery receipts.
@@ -139,7 +140,7 @@ OilSignal retains raw JSON per configured series, hashes source payloads into ob
 
 For live EIA runs, report, Q&A, and alert paths fail closed when the latest weekly evidence trails the expected WPSR week after the configured publication time plus the two-hour API grace window. Synthetic fixture runs are explicitly excluded from the live freshness gate by ingestion provenance. See [`docs/eia-setup.md`](docs/eia-setup.md) and [`docs/freshness.md`](docs/freshness.md).
 
-## API examples
+## Reports and API examples
 
 Generate the structured weekly report:
 
@@ -147,7 +148,22 @@ Generate the structured weekly report:
 curl http://localhost:8000/api/reports/weekly
 ```
 
-Render Markdown:
+Generate the crude flow reconciliation:
+
+```bash
+oilsignal report --type crude-balance --format markdown --data-dir ./data
+curl http://localhost:8000/api/reports/crude-balance
+```
+
+The Crude Balance Watch uses:
+
+```text
+core flow balance = production + imports - exports - refinery input
+```
+
+It then compares that partial flow result with the daily-equivalent change in commercial crude stocks and reports the difference as an **other/adjustment residual**. That residual is not a forecast error, a trading signal, or an official EIA balance component. See [`docs/crude-balance.md`](docs/crude-balance.md).
+
+Render the standard weekly brief as Markdown:
 
 ```bash
 curl "http://localhost:8000/api/reports/weekly/render?format=markdown"
@@ -158,10 +174,10 @@ Ask a deterministic question against ingested evidence:
 ```bash
 curl -X POST http://localhost:8000/api/ask \
   -H 'content-type: application/json' \
-  -d '{"question":"Explain Midwest diesel tightness this week"}'
+  -d '{"question":"What is the crude balance this week?"}'
 ```
 
-The response contains both `answer` and structured `evidence` objects.
+The response contains both `answer` and structured `evidence` objects. Explicit crude production, export, refinery-input, and crude-balance questions route to the corresponding maintained evidence rather than an inventory substitute.
 
 ## Composite alerts and worker delivery
 
@@ -213,6 +229,7 @@ The CLI is cron-friendly. A typical self-hosted flow is verify source contract �
 0 13 * * 3 cd /srv/oil-signal && .venv/bin/oilsignal alerts-evaluate --rules config/alerts.json --data-dir data
 5 13 * * 3 cd /srv/oil-signal && .venv/bin/oilsignal alerts-deliver --adapter console --data-dir data
 10 13 * * 3 cd /srv/oil-signal && .venv/bin/oilsignal report --type weekly --format markdown --data-dir data > /var/reports/oilsignal-weekly.md
+15 13 * * 3 cd /srv/oil-signal && .venv/bin/oilsignal report --type crude-balance --format markdown --data-dir data > /var/reports/oilsignal-crude-balance.md
 ```
 
 The release-aware freshness gate—not the example clock—is the source of truth. Holiday-delayed weeks remain stale until the expected release and current evidence arrive.
@@ -225,7 +242,7 @@ Email/Slack/Teams implementations can plug into the same adapter/outbox boundary
 backend/oilsignal/
 ├── agent/          # typed tools, validator, optional LLM client
 ├── alerts/         # threshold/composite rules, edge state, leased delivery
-├── analytics/      # deterministic petroleum time-series calculations
+├── analytics/      # deterministic petroleum time-series + crude-flow reconciliation
 ├── api/            # FastAPI endpoints
 ├── data_ingestion/ # EIA client/registry/verification/live ingestion + fixtures
 ├── freshness.py    # WPSR release calendar and stale-data gate
@@ -234,12 +251,12 @@ backend/oilsignal/
 frontend/           # React + TypeScript + Vite
 examples/           # offline ingestion, maintained EIA registry, alert policies
 tests/              # network-free fixtures and acceptance tests
-docs/               # architecture, provenance, freshness, safety, open-core model
+docs/               # architecture, provenance, freshness, balance semantics, safety
 ```
 
 ## Safety and product boundary
 
-OilSignal v1 is for **operational decision support**. It deliberately excludes order execution, buy/sell recommendations, portfolio sizing, and price prediction. Missing or stale live evidence must fail closed or omit a section instead of creating a plausible number. See [`docs/agent-safety.md`](docs/agent-safety.md).
+OilSignal v1 is for **operational decision support**. It deliberately excludes order execution, buy/sell recommendations, portfolio sizing, and price prediction. Missing or stale live evidence must fail closed or omit a section instead of creating a plausible number. Partial balance calculations are labeled as such and must not be presented as official EIA accounting identities. See [`docs/agent-safety.md`](docs/agent-safety.md).
 
 ## Open core
 
@@ -247,10 +264,10 @@ Community code is Apache-2.0 with no artificial feature lockouts. A commercial h
 
 ## Roadmap
 
-1. Expand verified PADD/product-supplied coverage plus crude production, exports, and refinery-input balances while preserving stable canonical IDs.
+1. Expand verified PADD crude/product coverage and add more explicit supply-disposition components without weakening canonical-series or citation contracts.
 2. Generalize release calendars and freshness policies beyond WPSR-backed weekly series.
 3. Add production email/Slack/Teams adapters with provider idempotency and a distributed hosted worker backend.
-4. Expand the evaluation suite for claim coverage, citation accuracy, alert reproducibility, freshness behavior, and explanation faithfulness.
+4. Expand the evaluation suite for claim coverage, citation accuracy, balance reconciliation, alert reproducibility, freshness behavior, and explanation faithfulness.
 5. Add optional private connectors and organization knowledge boundaries.
 6. Add facility/emissions intelligence using public EPA data after the fundamentals workflow is mature.
 

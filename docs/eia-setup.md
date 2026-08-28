@@ -18,17 +18,20 @@ Tests, fixture ingestion, and deterministic reports over already-ingested data d
 
 ## 2. Maintained core registry
 
-The current registry includes inventory, refinery/import, and product-supplied demand-proxy series:
+The current registry includes inventory, crude-flow, refinery/import, and product-supplied demand-proxy series:
 
 | OilSignal canonical ID | EIA legacy weekly series | Meaning |
 | --- | --- | --- |
 | `PET.CRDUUS.W` | `PET.WCESTUS1.W` | U.S. commercial crude stocks excluding SPR |
+| `PET.CRPRODUS.W` | `PET.WCRFPUS2.W` | U.S. field production of crude oil |
+| `PET.CRIMUS.W` | `PET.WCRIMUS2.W` | U.S. crude oil imports |
+| `PET.CREXUS.W` | `PET.WCREXUS2.W` | U.S. crude oil exports |
+| `PET.CRINUS.W` | `PET.WCRRIUS2.W` | U.S. refiner net input of crude oil |
 | `PET.GASUS.W` | `PET.WGTSTUS1.W` | U.S. total gasoline stocks |
 | `PET.DISTUS.W` | `PET.WDISTUS1.W` | U.S. distillate fuel oil stocks |
 | `PET.DISTP2.W` | `PET.WDISTP21.W` | PADD 2 distillate fuel oil stocks |
 | `PET.JETUS.W` | `PET.WKJSTUS1.W` | U.S. kerosene-type jet fuel stocks |
 | `PET.UTILUS.W` | `PET.WPULEUS3.W` | U.S. refinery utilization |
-| `PET.CRIMUS.W` | `PET.WCRIMUS2.W` | U.S. crude oil imports |
 | `PET.GASPSUS.W` | `PET.WGFUPUS2.W` | U.S. finished motor gasoline product supplied |
 | `PET.DISTPSUS.W` | `PET.WDIUPUS2.W` | U.S. distillate fuel oil product supplied |
 | `PET.JETPSUS.W` | `PET.WKJUPUS2.W` | U.S. kerosene-type jet fuel product supplied |
@@ -103,10 +106,15 @@ For live `eia:v2` ingestion runs, OilSignal compares weekly observations with th
 
 The offline fixture has different ingestion provenance and is intentionally exempt from the live release gate. See `docs/freshness.md` for timing and holiday behavior.
 
-## 7. Render a report
+## 7. Render reports
 
 ```bash
 oilsignal report --type weekly --format markdown --data-dir ./data
+oilsignal report --type crude-balance --format markdown --data-dir ./data
 ```
 
-The Weekly Petroleum Brief opportunistically includes maintained inventory, imports, refinery utilization, and product-supplied signals when available. The Distillate Supply Risk Brief adds U.S. distillate product supplied as a demand-pressure section when that series is present. Every numeric claim remains cited through the same validator/calculation path.
+The Weekly Petroleum Brief opportunistically includes maintained inventory, production, imports, exports, refinery crude input, refinery utilization, and product-supplied signals when available.
+
+The Crude Balance Watch requires aligned weekly crude production/import/export/refinery-input observations plus commercial crude stocks. It calculates a partial core-flow balance and reconciles it to the observed commercial-stock change with a separately cited other/adjustment residual. It is deliberately not described as an official EIA balance identity. See `docs/crude-balance.md` for the formula and interpretation boundary.
+
+The Distillate Supply Risk Brief adds U.S. distillate product supplied as a demand-pressure section when that series is present. Every numeric claim remains cited through the same validator/calculation path.

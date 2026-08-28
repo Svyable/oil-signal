@@ -58,3 +58,37 @@ def test_deterministic_answer_routes_demand_questions_to_product_supplied(data_d
     assert "U.S. distillate product supplied" in response.answer
     assert response.evidence
     assert all(citation.series_id == "PET.DISTPSUS.W" for citation in response.evidence)
+
+
+def test_deterministic_answer_routes_crude_flow_and_balance_questions(data_dir: Path) -> None:
+    result = FixtureIngestor(data_dir).ingest_csv(FIXTURE)
+    observations = load_observations(result.parquet_path)
+    crude_rows = [row for row in observations if row.series_id == "PET.CRDUUS.W"][-2:]
+    current = crude_rows[-1]
+    flow_values = {
+        "PET.CRPRODUS.W": ("production", 13600.0),
+        "PET.CRIMUS.W": ("imports", 6200.0),
+        "PET.CREXUS.W": ("exports", 3800.0),
+        "PET.CRINUS.W": ("refinery_input", 17300.0),
+    }
+    flow_rows = [
+        current.model_copy(
+            update={
+                "series_id": series_id,
+                "metric": metric,
+                "unit": "thousand barrels per day",
+                "value": value,
+            }
+        )
+        for series_id, (metric, value) in flow_values.items()
+    ]
+    enriched = [*observations, *flow_rows]
+
+    exports = _deterministic_answer("How are crude exports moving?", enriched)
+    balance = _deterministic_answer("What is the crude balance this week?", enriched)
+
+    assert "crude oil exports" in exports.answer
+    assert all(citation.series_id == "PET.CREXUS.W" for citation in exports.evidence)
+    assert "Core crude flow balance" in balance.answer
+    assert "not an official EIA balance identity" in balance.answer
+    assert {citation.series_id for citation in balance.evidence} == set(flow_values)
