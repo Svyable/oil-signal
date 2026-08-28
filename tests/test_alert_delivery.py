@@ -264,6 +264,7 @@ def test_webhook_retry_after_delta_defers_retry(data_dir: Path) -> None:
         policy=policy,
         now=T0,
     )
+    schedule = get_alert_retry_schedule(metadata_path, outbox_id)
     blocked = flush_alert_outbox(
         metadata_path,
         adapter,
@@ -282,12 +283,11 @@ def test_webhook_retry_after_delta_defers_retry(data_dir: Path) -> None:
     assert first[0].status == "failed"
     assert first[0].retryable is True
     assert first[0].retry_at == T0 + timedelta(seconds=120)
-    schedule = get_alert_retry_schedule(metadata_path, outbox_id)
+    assert schedule is not None
+    assert schedule.retry_at == T0 + timedelta(seconds=120)
     assert blocked == []
     assert second[0].status == "delivered"
     assert second[0].attempts == 2
-    assert schedule is not None
-    assert schedule.retry_at == T0 + timedelta(seconds=120)
     assert get_alert_retry_schedule(metadata_path, outbox_id) is None
 
 
@@ -324,6 +324,7 @@ def test_webhook_retry_after_http_date_is_capped(data_dir: Path) -> None:
         policy=policy,
         now=T0,
     )
+    schedule = get_alert_retry_schedule(metadata_path, outbox_id)
     blocked = flush_alert_outbox(
         metadata_path,
         adapter,
@@ -341,7 +342,6 @@ def test_webhook_retry_after_http_date_is_capped(data_dir: Path) -> None:
 
     assert first[0].status == "failed"
     assert first[0].retry_at == T0 + timedelta(seconds=90)
-    schedule = get_alert_retry_schedule(metadata_path, outbox_id)
     assert schedule is not None
     assert schedule.retry_at == T0 + timedelta(seconds=90)
     assert blocked == []
