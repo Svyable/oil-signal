@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from oilsignal.agent.products import (
+    AgentCatalog,
+    AgentQuote,
+    build_agent_catalog,
+    build_evidence_pack,
+    product_exists,
+    quote_agent_product,
+)
 from oilsignal.alerts.engine import (
     AlertEvaluationResult,
     AlertPolicySet,
@@ -36,7 +46,7 @@ from oilsignal.reports.specialized import (
     RefineryUtilizationWatch,
 )
 from oilsignal.reports.weekly import WeeklyPetroleumBrief
-from oilsignal.storage.datasets import inspect_data, load_latest_observations
+from oilsignal.storage.datasets import DataStatus, inspect_data, load_latest_observations
 
 
 class AskRequest(BaseModel):
@@ -170,9 +180,25 @@ def _deterministic_answer(question: str, observations: list[Observation]) -> Ask
     return AskResponse(answer=answer, evidence=evidence)
 
 
-def create_app(data_dir: Path | None = None) -> FastAPI:
+def _etag_matches(if_none_match: str | None, etag: str) -> bool:
+    if not if_none_match:
+        return False
+    candidates = {item.strip() for item in if_none_match.split(",")}
+    return "*" in candidates or etag in candidates
+
+
+def create_app(
+    data_dir: Path | None = None,
+    *,
+    agent_unit_price_usd: Decimal | None = None,
+) -> FastAPI:
     app = FastAPI(title="OilSignal API", version="0.2.0")
     app.state.data_dir = data_dir or settings.data_dir
+    app.state.agent_unit_price_usd = (
+        agent_unit_price_usd
+        if agent_unit_price_usd is not None
+        else settings.agent_evidence_pack_price_usd
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:5173", "http://localhost:3000"],
@@ -181,11 +207,21 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         allow_headers=["Content-Type"],
     )
 
-    def current_observations() -> list[Observation]:
+    def current_evidence_context() -> tuple[list[Observation], DataStatus, DatasetFreshness]:
         data_status = inspect_data(app.state.data_dir)
         observations = load_latest_observations(app.state.data_dir)
-        require_fresh_wpsr(observations, live_eia=data_status.is_live_eia)
+        freshness = require_fresh_wpsr(observations, live_eia=data_status.is_live_eia)
+        return observations, data_status, freshness
+
+    def current_observations() -> list[Observation]:
+        observations, _, _ = current_evidence_context()
         return observations
+
+    def agent_catalog() -> AgentCatalog:
+        return build_agent_catalog(
+            unit_price_usd=app.state.agent_unit_price_usd,
+            currency=settings.agent_price_currency,
+        )
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -219,6 +255,55 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             ),
             freshness=freshness,
         )
+
+    @app.get("/.well-known/oilsignal-agent.json", response_model=AgentCatalog)
+    def agent_discovery() -> AgentCatalog:
+        return agent_catalog()
+
+    @app.get("/api/agent/products", response_model=AgentCatalog)
+    def agent_products() -> AgentCatalog:
+        return agent_catalog()
+
+    @app.get("/api/agent/products/{sku}/quote", response_model=AgentQuote)
+    def agent_quote(sku: str) -> AgentQuote:
+        if not product_exists(sku):
+            raise HTTPException(status_code=404, detail=f"unknown agent product: {sku}")
+        return quote_agent_product(
+            sku,
+            unit_price_usd=app.state.agent_unit_price_usd,
+            currency=settings.agent_price_currency,
+        )
+
+    @app.get(
+        "/api/agent/products/{sku}/evidence",
+        response_model=None,
+        responses={304: {"description": "Evidence unchanged for supplied ETag"}},
+    )
+    def agent_evidence(sku: str, request: Request) -> Response:
+        if not product_exists(sku):
+            raise HTTPException(status_code=404, detail=f"unknown agent product: {sku}")
+        try:
+            observations, data_status, freshness = current_evidence_context()
+            pack = build_evidence_pack(
+                sku,
+                observations,
+                freshness=freshness,
+                data_source=data_status.source,
+                source_fetched_at=data_status.latest_fetched_at,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        etag = f'"sha256:{pack.evidence_sha256}"'
+        headers = {
+            "ETag": etag,
+            "Cache-Control": "private, max-age=0, must-revalidate",
+            "X-OilSignal-Evidence-SHA256": pack.evidence_sha256,
+            "X-OilSignal-SKU": pack.sku,
+        }
+        if _etag_matches(request.headers.get("if-none-match"), etag):
+            return Response(status_code=304, headers=headers)
+        return JSONResponse(content=pack.model_dump(mode="json"), headers=headers)
 
     @app.get("/api/reports/weekly", response_model=Report)
     def weekly_report() -> Report:
