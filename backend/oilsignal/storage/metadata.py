@@ -56,6 +56,11 @@ class AlertDeliveryLeaseRow(SQLModel, table=True):
     expires_at: datetime = Field(index=True)
 
 
+class AlertRetryScheduleRow(SQLModel, table=True):
+    outbox_id: str = Field(primary_key=True)
+    retry_at: datetime = Field(index=True)
+
+
 class AlertDeadLetterRow(SQLModel, table=True):
     id: str = Field(primary_key=True)
     outbox_id: str = Field(index=True)
@@ -150,6 +155,15 @@ def get_alert_delivery_lease(path: Path, outbox_id: str) -> AlertDeliveryLeaseRo
         return _copy_alert_lease(row) if row else None
 
 
+def get_alert_retry_schedule(path: Path, outbox_id: str) -> AlertRetryScheduleRow | None:
+    engine = create_metadata_engine(path)
+    with Session(engine) as session:
+        row = session.exec(
+            select(AlertRetryScheduleRow).where(AlertRetryScheduleRow.outbox_id == outbox_id)
+        ).first()
+        return _copy_retry_schedule(row) if row else None
+
+
 def list_alert_outbox(path: Path, limit: int = 100) -> list[AlertOutboxRow]:
     if limit < 1:
         raise ValueError("outbox limit must be positive")
@@ -209,6 +223,10 @@ def claim_alert_outbox(
 
         active_leases = session.exec(select(AlertDeliveryLeaseRow)).all()
         leased_ids = {lease.outbox_id for lease in active_leases}
+        retry_schedules = {
+            schedule.outbox_id: schedule
+            for schedule in session.exec(select(AlertRetryScheduleRow)).all()
+        }
         candidates = session.exec(
             select(AlertOutboxRow)
             .where(col(AlertOutboxRow.status).in_(["pending", "failed", "in_flight"]))
@@ -226,6 +244,13 @@ def claim_alert_outbox(
                     reason=row.last_error or "delivery attempt budget exhausted",
                 )
                 continue
+
+            retry_schedule = retry_schedules.get(row.id)
+            if retry_schedule is not None:
+                if _as_utc(retry_schedule.retry_at) > now:
+                    continue
+                session.delete(retry_schedule)
+
             if not _retry_is_due(
                 row,
                 now=now,
@@ -272,11 +297,16 @@ def complete_alert_delivery(
     delivered: bool,
     max_attempts: int,
     error: str | None = None,
+    permanent_failure: bool = False,
+    retry_at: datetime | None = None,
 ) -> AlertOutboxRow:
     """Acknowledge a claimed delivery only if the worker still owns a live lease."""
 
     _require_aware(now)
     now = now.astimezone(UTC)
+    if retry_at is not None:
+        _require_aware(retry_at)
+        retry_at = retry_at.astimezone(UTC)
     if max_attempts < 1:
         raise ValueError("max_attempts must be positive")
     engine = create_metadata_engine(path)
@@ -302,13 +332,17 @@ def complete_alert_delivery(
             row.status = "delivered"
             row.delivered_at = now
             row.last_error = None
+            _delete_retry_schedule_in_session(session, outbox_id)
         else:
             bounded_error = (error or "delivery failed")[:1000]
             row.last_error = bounded_error
-            if row.attempts >= max_attempts:
+            if permanent_failure or row.attempts >= max_attempts:
                 _dead_letter_in_session(session, row, now, reason=bounded_error)
             else:
                 row.status = "failed"
+                _delete_retry_schedule_in_session(session, outbox_id)
+                if retry_at is not None:
+                    session.add(AlertRetryScheduleRow(outbox_id=outbox_id, retry_at=retry_at))
         session.delete(lease)
         session.flush()
         completed = _copy_alert_outbox(row)
@@ -364,6 +398,7 @@ def requeue_alert_dead_letter(
         ).first()
         if lease is not None:
             session.delete(lease)
+        _delete_retry_schedule_in_session(session, outbox_id)
 
         dead_letter = session.exec(
             select(AlertDeadLetterRow)
@@ -413,6 +448,7 @@ def _dead_letter_in_session(
     *,
     reason: str,
 ) -> None:
+    _delete_retry_schedule_in_session(session, row.id)
     row.status = "dead_letter"
     row.last_error = reason[:1000]
     session.add(
@@ -426,6 +462,14 @@ def _dead_letter_in_session(
             payload_json=row.payload_json,
         )
     )
+
+
+def _delete_retry_schedule_in_session(session: Session, outbox_id: str) -> None:
+    schedule = session.exec(
+        select(AlertRetryScheduleRow).where(AlertRetryScheduleRow.outbox_id == outbox_id)
+    ).first()
+    if schedule is not None:
+        session.delete(schedule)
 
 
 def _validate_delivery_policy(
@@ -461,6 +505,14 @@ def _copy_alert_lease(row: AlertDeliveryLeaseRow) -> AlertDeliveryLeaseRow:
         if isinstance(value, datetime):
             data[field_name] = _as_utc(value)
     return AlertDeliveryLeaseRow.model_validate(data)
+
+
+def _copy_retry_schedule(row: AlertRetryScheduleRow) -> AlertRetryScheduleRow:
+    data = row.model_dump()
+    value = data.get("retry_at")
+    if isinstance(value, datetime):
+        data["retry_at"] = _as_utc(value)
+    return AlertRetryScheduleRow.model_validate(data)
 
 
 def _copy_dead_letter(row: AlertDeadLetterRow) -> AlertDeadLetterRow:

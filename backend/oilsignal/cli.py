@@ -100,6 +100,12 @@ def build_parser() -> argparse.ArgumentParser:
     deliver.add_argument("--max-attempts", type=int, default=5)
     deliver.add_argument("--base-backoff-seconds", type=int, default=30)
     deliver.add_argument("--max-backoff-seconds", type=int, default=3600)
+    deliver.add_argument(
+        "--max-retry-after-seconds",
+        type=int,
+        default=86400,
+        help="cap provider Retry-After deferrals; 0 ignores provider retry hints",
+    )
 
     dead_letters = subparsers.add_parser(
         "alerts-dead-letters",
@@ -144,6 +150,7 @@ def main(argv: list[str] | None = None) -> int:
             args.max_attempts,
             args.base_backoff_seconds,
             args.max_backoff_seconds,
+            args.max_retry_after_seconds,
         )
     if args.command == "alerts-dead-letters":
         return _alerts_dead_letters(args.data_dir, args.limit)
@@ -232,6 +239,7 @@ def _alerts_deliver(
     max_attempts: int,
     base_backoff_seconds: int,
     max_backoff_seconds: int,
+    max_retry_after_seconds: int,
 ) -> int:
     adapter = _build_delivery_adapter(adapter_name, webhook_url)
     policy = DeliveryPolicy(
@@ -239,6 +247,7 @@ def _alerts_deliver(
         max_attempts=max_attempts,
         base_backoff_seconds=base_backoff_seconds,
         max_backoff_seconds=max_backoff_seconds,
+        max_retry_after_seconds=max_retry_after_seconds,
     )
     receipts = flush_alert_outbox(
         data_dir / "metadata.sqlite",
