@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 from oilsignal.agent.validation import validate_report
 from oilsignal.analytics.crude_balance import (
     COMMERCIAL_CRUDE_STOCKS,
@@ -92,17 +94,21 @@ class CrudeBalanceWatch:
         )
         stock_claim = Claim(
             text=(
-                f"Commercial crude stocks changed at an equivalent rate of "
+                "Commercial crude stocks changed at an equivalent rate of "
                 f"{stock.result:+,.1f} {stock.unit} over "
                 f"{snapshot.stock_interval_days} days."
             ),
             kind=ClaimKind.NUMERIC,
-            citations=_stock_citations(observations, stock.calculation_id, stock.input_observation_dates),
+            citations=_stock_citations(
+                observations,
+                stock.calculation_id,
+                stock.input_observation_dates,
+            ),
             calculation=stock,
         )
         residual_claim = Claim(
             text=(
-                f"Observed stock change minus the core-flow balance was "
+                "Observed stock change minus the core-flow balance was "
                 f"{residual.result:+,.1f} {residual.unit}. This other/adjustment residual "
                 "captures flows and statistical adjustments outside the four core inputs, "
                 "rather than representing a forecast error."
@@ -120,13 +126,16 @@ class CrudeBalanceWatch:
         )
         return [
             ReportSection(heading="Core flow balance", claims=[core_claim]),
-            ReportSection(heading="Commercial-stock reconciliation", claims=[stock_claim, residual_claim]),
+            ReportSection(
+                heading="Commercial-stock reconciliation",
+                claims=[stock_claim, residual_claim],
+            ),
         ]
 
 
 def _flow_citations(
     observations: list[Observation],
-    observation_date,  # type: ignore[no-untyped-def]
+    observation_date: date,
     calculation_id: str,
 ) -> list[Citation]:
     series_ids = (CRUDE_PRODUCTION, CRUDE_IMPORTS, CRUDE_EXPORTS, CRUDE_REFINERY_INPUT)
@@ -151,7 +160,7 @@ def _flow_citations(
 def _stock_citations(
     observations: list[Observation],
     calculation_id: str,
-    dates,  # type: ignore[no-untyped-def]
+    dates: list[date],
 ) -> list[Citation]:
     citations: list[Citation] = []
     for observation_date in sorted(set(dates)):
