@@ -57,7 +57,7 @@ def test_evidence_pack_has_stable_digest_raw_hashes_and_etag(data_dir: Path) -> 
     first_payload = first.json()
     second_payload = second.json()
     assert first_payload["evidence_sha256"] == second_payload["evidence_sha256"]
-    assert first.headers["etag"] == f'"sha256:{first_payload["evidence_sha256"]}"'
+    assert first.headers["etag"] == f'W/"sha256:{first_payload["evidence_sha256"]}"'
     assert first.headers["x-oilsignal-sku"] == "weekly-petroleum-evidence"
     assert first_payload["freshness"]["status"] == "not_applicable"
     assert first_payload["claims"]
@@ -75,21 +75,28 @@ def test_evidence_pack_has_stable_digest_raw_hashes_and_etag(data_dir: Path) -> 
         )
 
 
-def test_evidence_endpoint_returns_304_for_matching_etag(data_dir: Path) -> None:
+def test_evidence_endpoint_returns_304_for_semantically_matching_etag(data_dir: Path) -> None:
     FixtureIngestor(data_dir).ingest_csv(FIXTURE)
     client = TestClient(create_app(data_dir))
     first = client.get("/api/agent/products/refinery-utilization-evidence/evidence")
+    weak_etag = first.headers["etag"]
 
     cached = client.get(
         "/api/agent/products/refinery-utilization-evidence/evidence",
-        headers={"If-None-Match": first.headers["etag"]},
+        headers={"If-None-Match": weak_etag},
+    )
+    strong_form = client.get(
+        "/api/agent/products/refinery-utilization-evidence/evidence",
+        headers={"If-None-Match": weak_etag.removeprefix("W/")},
     )
 
     assert first.status_code == 200
+    assert weak_etag.startswith('W/"sha256:')
     assert cached.status_code == 304
     assert cached.content == b""
-    assert cached.headers["etag"] == first.headers["etag"]
+    assert cached.headers["etag"] == weak_etag
     assert cached.headers["x-oilsignal-evidence-sha256"] == first.json()["evidence_sha256"]
+    assert strong_form.status_code == 304
 
 
 def test_evidence_digest_changes_when_cited_source_hash_changes(data_dir: Path) -> None:
