@@ -13,6 +13,13 @@ from oilsignal.alerts.engine import (
     evaluate_policies,
     evaluate_policies_with_state,
 )
+from oilsignal.analytics.crude_balance import (
+    CRUDE_EXPORTS,
+    CRUDE_IMPORTS,
+    CRUDE_PRODUCTION,
+    CRUDE_REFINERY_INPUT,
+    build_crude_balance,
+)
 from oilsignal.analytics.petroleum import build_snapshot
 from oilsignal.config import settings
 from oilsignal.freshness import (
@@ -23,7 +30,11 @@ from oilsignal.freshness import (
 )
 from oilsignal.models import Citation, Observation, Report
 from oilsignal.reports.renderers import render_report
-from oilsignal.reports.specialized import DistillateSupplyRiskBrief, RefineryUtilizationWatch
+from oilsignal.reports.specialized import (
+    CrudeBalanceWatch,
+    DistillateSupplyRiskBrief,
+    RefineryUtilizationWatch,
+)
 from oilsignal.reports.weekly import WeeklyPetroleumBrief
 from oilsignal.storage.datasets import inspect_data, load_latest_observations
 
@@ -79,6 +90,12 @@ def _question_series(question: str) -> tuple[str, str]:
 
     if any(token in normalized for token in ("diesel", "distillate", "midwest", "padd 2")):
         return "PET.DISTP2.W", "PADD 2 distillate stocks"
+    if any(token in normalized for token in ("crude production", "field production")):
+        return CRUDE_PRODUCTION, "U.S. crude oil field production"
+    if any(token in normalized for token in ("crude export", "crude exports")):
+        return CRUDE_EXPORTS, "U.S. crude oil exports"
+    if any(token in normalized for token in ("refinery input", "refiner input", "crude input")):
+        return CRUDE_REFINERY_INPUT, "U.S. refiner net input of crude oil"
     if any(token in normalized for token in ("refinery", "utilization")):
         return "PET.UTILUS.W", "U.S. refinery utilization"
     if any(token in normalized for token in ("gasoline", "motor gas")):
@@ -86,11 +103,36 @@ def _question_series(question: str) -> tuple[str, str]:
     if any(token in normalized for token in ("jet", "aviation")):
         return "PET.JETUS.W", "U.S. jet fuel stocks"
     if any(token in normalized for token in ("import", "imports")):
-        return "PET.CRIMUS.W", "U.S. crude oil imports"
+        return CRUDE_IMPORTS, "U.S. crude oil imports"
     return "PET.CRDUUS.W", "U.S. crude oil stocks"
 
 
 def _deterministic_answer(question: str, observations: list[Observation]) -> AskResponse:
+    normalized = question.lower()
+    if "crude" in normalized and "balance" in normalized:
+        snapshot = build_crude_balance(observations)
+        trace = snapshot.core_flow_balance
+        evidence = [
+            _citation(
+                next(
+                    row
+                    for row in observations
+                    if row.series_id == series_id and row.observation_date == snapshot.as_of
+                ),
+                trace.calculation_id,
+            )
+            for series_id in (CRUDE_PRODUCTION, CRUDE_IMPORTS, CRUDE_EXPORTS, CRUDE_REFINERY_INPUT)
+        ]
+        return AskResponse(
+            answer=(
+                f"Core crude flow balance was {trace.result:+,.1f} {trace.unit} as of "
+                f"{snapshot.as_of.isoformat()}, calculated as production plus imports minus "
+                "exports and refinery input. This is a partial deterministic reconciliation, "
+                "not an official EIA balance identity."
+            ),
+            evidence=evidence,
+        )
+
     series_id, label = _question_series(question)
     rows = sorted(
         [row for row in observations if row.series_id == series_id],
@@ -187,6 +229,13 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     def refinery_report() -> Report:
         try:
             return RefineryUtilizationWatch().build(current_observations())
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/api/reports/crude-balance", response_model=Report)
+    def crude_balance_report() -> Report:
+        try:
+            return CrudeBalanceWatch().build(current_observations())
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
