@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     alert_webhook_bearer_token: SecretStr | None = None
     alert_webhook_signing_secret: SecretStr | None = None
     alert_webhook_timeout_seconds: float = Field(default=10.0, gt=0)
+    alert_webhook_allow_insecure_http: bool = False
 
     @property
     def parquet_dir(self) -> Path:
