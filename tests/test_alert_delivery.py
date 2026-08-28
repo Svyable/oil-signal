@@ -1,7 +1,16 @@
+import hmac
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from pathlib import Path
 
-from oilsignal.alerts.delivery import DeliveryPolicy, flush_alert_outbox
+import httpx
+import pytest
+
+from oilsignal.alerts.delivery import (
+    DeliveryPolicy,
+    WebhookOutboxDelivery,
+    flush_alert_outbox,
+)
 from oilsignal.alerts.engine import (
     AlertPolicy,
     AlertPolicySet,
@@ -28,10 +37,10 @@ class RecordingAdapter:
     name = "recording"
 
     def __init__(self) -> None:
-        self.payloads: list[str] = []
+        self.payloads: list[tuple[str, str]] = []
 
-    def send(self, payload_json: str) -> None:
-        self.payloads.append(payload_json)
+    def send(self, payload_json: str, *, idempotency_key: str) -> None:
+        self.payloads.append((payload_json, idempotency_key))
 
 
 class FlakyAdapter:
@@ -40,7 +49,8 @@ class FlakyAdapter:
     def __init__(self) -> None:
         self.calls = 0
 
-    def send(self, payload_json: str) -> None:
+    def send(self, payload_json: str, *, idempotency_key: str) -> None:
+        del payload_json, idempotency_key
         self.calls += 1
         if self.calls == 1:
             raise RuntimeError("temporary delivery failure")
@@ -49,7 +59,8 @@ class FlakyAdapter:
 class FailingAdapter:
     name = "failing"
 
-    def send(self, payload_json: str) -> None:
+    def send(self, payload_json: str, *, idempotency_key: str) -> None:
+        del payload_json, idempotency_key
         raise RuntimeError("provider unavailable")
 
 
@@ -109,12 +120,84 @@ def test_outbox_success_records_delivery_receipt(data_dir: Path) -> None:
     assert receipts[0].attempts == 1
     assert receipts[0].worker_id == "worker-a"
     assert len(adapter.payloads) == 1
+    assert adapter.payloads[0][1] == outbox_id
     stored = get_alert_outbox(metadata_path, outbox_id)
     assert stored is not None
     assert stored.status == "delivered"
     assert stored.delivered_at == T0
     assert list_alert_outbox(metadata_path) == []
     assert get_alert_delivery_lease(metadata_path, outbox_id) is None
+
+
+def test_webhook_delivery_sends_stable_idempotency_and_auth_headers(data_dir: Path) -> None:
+    metadata_path, outbox_id = _enqueue(data_dir)
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.content.decode()
+        captured["idempotency"] = request.headers["Idempotency-Key"]
+        captured["outbox"] = request.headers["X-OilSignal-Outbox-ID"]
+        captured["authorization"] = request.headers["Authorization"]
+        captured["signature"] = request.headers["X-OilSignal-Signature"]
+        return httpx.Response(202)
+
+    adapter = WebhookOutboxDelivery(
+        "https://alerts.example.test/oilsignal",
+        bearer_token="delivery-token",
+        signing_secret="signing-secret",
+        transport=httpx.MockTransport(handler),
+    )
+
+    receipts = flush_alert_outbox(metadata_path, adapter, worker_id="worker-webhook", now=T0)
+
+    assert receipts[0].status == "delivered"
+    assert receipts[0].adapter == "webhook"
+    assert captured["idempotency"] == outbox_id
+    assert captured["outbox"] == outbox_id
+    assert captured["authorization"] == "Bearer delivery-token"
+    expected = hmac.new(
+        b"signing-secret",
+        f"{outbox_id}.{captured['body']}".encode(),
+        sha256,
+    ).hexdigest()
+    assert captured["signature"] == f"sha256={expected}"
+
+
+def test_webhook_failure_enters_retry_path_without_leaking_auth_token(data_dir: Path) -> None:
+    metadata_path, _ = _enqueue(data_dir)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(503, text="temporarily unavailable")
+
+    adapter = WebhookOutboxDelivery(
+        "https://alerts.example.test/oilsignal",
+        bearer_token="super-secret-token",
+        transport=httpx.MockTransport(handler),
+    )
+    policy = DeliveryPolicy(
+        max_attempts=1,
+        base_backoff_seconds=0,
+        max_backoff_seconds=0,
+    )
+
+    receipts = flush_alert_outbox(
+        metadata_path,
+        adapter,
+        worker_id="worker-webhook",
+        policy=policy,
+        now=T0,
+    )
+
+    assert receipts[0].status == "dead_letter"
+    assert receipts[0].error is not None
+    assert "503" in receipts[0].error
+    assert "super-secret-token" not in receipts[0].error
+
+
+def test_webhook_rejects_embedded_url_credentials() -> None:
+    with pytest.raises(ValueError, match="must not contain embedded credentials"):
+        WebhookOutboxDelivery("https://user:secret@example.test/hook")
 
 
 def test_active_lease_prevents_second_worker_from_claiming_same_row(data_dir: Path) -> None:
