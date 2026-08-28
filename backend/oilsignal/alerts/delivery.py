@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import hmac
 import os
 import socket
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import urlparse
 from uuid import uuid4
 
+import httpx
 from pydantic import BaseModel, Field, model_validator
 
 from oilsignal.storage.metadata import (
@@ -19,14 +23,69 @@ from oilsignal.storage.metadata import (
 class OutboxDeliveryAdapter(Protocol):
     name: str
 
-    def send(self, payload_json: str) -> None: ...
+    def send(self, payload_json: str, *, idempotency_key: str) -> None: ...
 
 
 class ConsoleOutboxDelivery:
     name = "console"
 
-    def send(self, payload_json: str) -> None:
+    def send(self, payload_json: str, *, idempotency_key: str) -> None:
+        del idempotency_key
         print(payload_json)
+
+
+class WebhookOutboxDelivery:
+    """Vendor-neutral HTTP delivery with stable retry identity and optional authentication."""
+
+    name = "webhook"
+
+    def __init__(
+        self,
+        endpoint: str,
+        *,
+        bearer_token: str | None = None,
+        signing_secret: str | None = None,
+        timeout_seconds: float = 10.0,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
+        parsed = urlparse(endpoint)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("webhook endpoint must be an absolute http(s) URL")
+        if parsed.username or parsed.password:
+            raise ValueError("webhook endpoint must not contain embedded credentials")
+        if timeout_seconds <= 0:
+            raise ValueError("webhook timeout_seconds must be positive")
+        self.endpoint = endpoint
+        self.bearer_token = bearer_token
+        self.signing_secret = signing_secret
+        self.timeout_seconds = timeout_seconds
+        self.transport = transport
+
+    def send(self, payload_json: str, *, idempotency_key: str) -> None:
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "OilSignal/0.2",
+            "Idempotency-Key": idempotency_key,
+            "X-OilSignal-Outbox-ID": idempotency_key,
+        }
+        if self.bearer_token:
+            headers["Authorization"] = f"Bearer {self.bearer_token}"
+        if self.signing_secret:
+            message = f"{idempotency_key}.{payload_json}".encode()
+            digest = hmac.new(self.signing_secret.encode(), message, sha256).hexdigest()
+            headers["X-OilSignal-Signature"] = f"sha256={digest}"
+
+        with httpx.Client(
+            timeout=self.timeout_seconds,
+            transport=self.transport,
+            follow_redirects=False,
+        ) as client:
+            response = client.post(
+                self.endpoint,
+                content=payload_json.encode(),
+                headers=headers,
+            )
+            response.raise_for_status()
 
 
 class DeliveryPolicy(BaseModel):
@@ -89,7 +148,7 @@ def flush_alert_outbox(
         error: str | None = None
         delivered = False
         try:
-            adapter.send(claimed.payload_json)
+            adapter.send(claimed.payload_json, idempotency_key=claimed.id)
             delivered = True
         except Exception as exc:
             error = str(exc)[:1000] or exc.__class__.__name__
