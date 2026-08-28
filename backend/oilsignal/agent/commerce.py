@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from decimal import Decimal
 from typing import Protocol
 
@@ -19,18 +20,18 @@ class PaymentRequirement(BaseModel):
 
 
 class PaymentChallenge(BaseModel):
-    """Wire challenge returned by a payment adapter for HTTP 402."""
+    """Protocol-owned headers returned with an HTTP 402 challenge."""
 
     protocol: str
-    www_authenticate: str = Field(min_length=1)
+    response_headers: dict[str, str]
     challenge_id: str | None = None
 
 
 class VerifiedPayment(BaseModel):
-    """Successful adapter verification, including its standard receipt header."""
+    """Successful adapter verification plus protocol-owned response headers."""
 
     protocol: str
-    receipt_header: str = Field(min_length=1)
+    response_headers: dict[str, str]
     external_id: str = Field(min_length=1)
     reference: str | None = None
     payer: str | None = None
@@ -70,12 +71,13 @@ class PaymentGatewayUnavailable(PaymentGatewayError):
 
 
 class PaymentGateway(Protocol):
-    """Payment-method agnostic HTTP 402 adapter boundary.
+    """Payment-rail and HTTP-header neutral 402 adapter boundary.
 
-    Implementations can speak MPP, x402, credits, cards, stablecoins, or another
-    rail. The core passes the exact evidence-bound requirement into both challenge
-    generation and verification; adapters are responsible for settlement,
-    credential replay protection, and provider-specific receipt semantics.
+    Implementations can map the same OilSignal requirement into MPP, x402,
+    account credits, cards, stablecoins, or another machine-payment protocol.
+    The adapter owns its request credential headers, challenge headers, settlement,
+    replay protection, and receipt headers. OilSignal owns the SKU, price, and
+    evidence binding.
 
     Successful verification must echo ``requirement.external_id`` in
     ``VerifiedPayment.external_id``. OilSignal rejects mismatches before serving
@@ -83,12 +85,13 @@ class PaymentGateway(Protocol):
     """
 
     protocol: str
+    credential_headers: tuple[str, ...]
 
     def challenge(self, requirement: PaymentRequirement) -> PaymentChallenge: ...
 
     def verify(
         self,
-        authorization: str,
+        request_headers: Mapping[str, str],
         requirement: PaymentRequirement,
     ) -> VerifiedPayment: ...
 
