@@ -1,5 +1,6 @@
 import hmac
 from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime
 from hashlib import sha256
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from oilsignal.storage.metadata import (
     claim_alert_outbox,
     get_alert_delivery_lease,
     get_alert_outbox,
+    get_alert_retry_schedule,
     list_alert_dead_letters,
     list_alert_outbox,
     requeue_alert_dead_letter,
@@ -118,6 +120,8 @@ def test_outbox_success_records_delivery_receipt(data_dir: Path) -> None:
     assert receipts[0].status == "delivered"
     assert receipts[0].attempts == 1
     assert receipts[0].worker_id == "worker-a"
+    assert receipts[0].retryable is None
+    assert receipts[0].retry_at is None
     assert len(adapter.payloads) == 1
     assert adapter.payloads[0][1] == outbox_id
     stored = get_alert_outbox(metadata_path, outbox_id)
@@ -126,6 +130,7 @@ def test_outbox_success_records_delivery_receipt(data_dir: Path) -> None:
     assert stored.delivered_at == T0
     assert list_alert_outbox(metadata_path) == []
     assert get_alert_delivery_lease(metadata_path, outbox_id) is None
+    assert get_alert_retry_schedule(metadata_path, outbox_id) is None
 
 
 def test_webhook_delivery_sends_stable_idempotency_and_auth_headers(data_dir: Path) -> None:
@@ -189,9 +194,159 @@ def test_webhook_failure_enters_retry_path_without_leaking_secrets(data_dir: Pat
     )
 
     assert receipts[0].status == "dead_letter"
+    assert receipts[0].retryable is True
     assert receipts[0].error == "webhook returned HTTP 503"
     assert "super-secret-token" not in receipts[0].error
     assert "url-secret" not in receipts[0].error
+
+
+def test_webhook_permanent_4xx_dead_letters_after_one_attempt(data_dir: Path) -> None:
+    metadata_path, outbox_id = _enqueue(data_dir)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(401, text="invalid credentials")
+
+    adapter = WebhookOutboxDelivery(
+        "https://alerts.example.test/oilsignal",
+        transport=httpx.MockTransport(handler),
+    )
+    policy = DeliveryPolicy(max_attempts=5)
+
+    receipts = flush_alert_outbox(
+        metadata_path,
+        adapter,
+        worker_id="worker-webhook",
+        policy=policy,
+        now=T0,
+    )
+
+    assert len(receipts) == 1
+    assert receipts[0].status == "dead_letter"
+    assert receipts[0].attempts == 1
+    assert receipts[0].retryable is False
+    assert receipts[0].retry_at is None
+    stored = get_alert_outbox(metadata_path, outbox_id)
+    assert stored is not None
+    assert stored.status == "dead_letter"
+    assert stored.attempts == 1
+    dead_letters = list_alert_dead_letters(metadata_path)
+    assert len(dead_letters) == 1
+    assert dead_letters[0].reason == "webhook returned HTTP 401"
+
+
+def test_webhook_retry_after_delta_defers_retry(data_dir: Path) -> None:
+    metadata_path, outbox_id = _enqueue(data_dir)
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        del request
+        calls += 1
+        if calls == 1:
+            return httpx.Response(429, headers={"Retry-After": "120"})
+        return httpx.Response(204)
+
+    adapter = WebhookOutboxDelivery(
+        "https://alerts.example.test/oilsignal",
+        transport=httpx.MockTransport(handler),
+    )
+    policy = DeliveryPolicy(
+        base_backoff_seconds=30,
+        max_backoff_seconds=600,
+        max_retry_after_seconds=3600,
+    )
+
+    first = flush_alert_outbox(
+        metadata_path,
+        adapter,
+        worker_id="worker-a",
+        policy=policy,
+        now=T0,
+    )
+    blocked = flush_alert_outbox(
+        metadata_path,
+        adapter,
+        worker_id="worker-b",
+        policy=policy,
+        now=T0 + timedelta(seconds=119),
+    )
+    second = flush_alert_outbox(
+        metadata_path,
+        adapter,
+        worker_id="worker-b",
+        policy=policy,
+        now=T0 + timedelta(seconds=120),
+    )
+
+    assert first[0].status == "failed"
+    assert first[0].retryable is True
+    assert first[0].retry_at == T0 + timedelta(seconds=120)
+    schedule = get_alert_retry_schedule(metadata_path, outbox_id)
+    assert blocked == []
+    assert second[0].status == "delivered"
+    assert second[0].attempts == 2
+    assert schedule is not None
+    assert schedule.retry_at == T0 + timedelta(seconds=120)
+    assert get_alert_retry_schedule(metadata_path, outbox_id) is None
+
+
+def test_webhook_retry_after_http_date_is_capped(data_dir: Path) -> None:
+    metadata_path, outbox_id = _enqueue(data_dir)
+    calls = 0
+    requested_retry_at = T0 + timedelta(minutes=10)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        del request
+        calls += 1
+        if calls == 1:
+            return httpx.Response(
+                503,
+                headers={"Retry-After": format_datetime(requested_retry_at, usegmt=True)},
+            )
+        return httpx.Response(204)
+
+    adapter = WebhookOutboxDelivery(
+        "https://alerts.example.test/oilsignal",
+        transport=httpx.MockTransport(handler),
+    )
+    policy = DeliveryPolicy(
+        base_backoff_seconds=30,
+        max_backoff_seconds=600,
+        max_retry_after_seconds=90,
+    )
+
+    first = flush_alert_outbox(
+        metadata_path,
+        adapter,
+        worker_id="worker-a",
+        policy=policy,
+        now=T0,
+    )
+    blocked = flush_alert_outbox(
+        metadata_path,
+        adapter,
+        worker_id="worker-b",
+        policy=policy,
+        now=T0 + timedelta(seconds=89),
+    )
+    second = flush_alert_outbox(
+        metadata_path,
+        adapter,
+        worker_id="worker-b",
+        policy=policy,
+        now=T0 + timedelta(seconds=90),
+    )
+
+    assert first[0].status == "failed"
+    assert first[0].retry_at == T0 + timedelta(seconds=90)
+    schedule = get_alert_retry_schedule(metadata_path, outbox_id)
+    assert schedule is not None
+    assert schedule.retry_at == T0 + timedelta(seconds=90)
+    assert blocked == []
+    assert second[0].status == "delivered"
+    assert get_alert_retry_schedule(metadata_path, outbox_id) is None
 
 
 def test_webhook_rejects_embedded_url_credentials() -> None:
@@ -294,6 +449,7 @@ def test_failed_outbox_delivery_waits_for_exponential_backoff(data_dir: Path) ->
 
     assert first[0].status == "failed"
     assert first[0].attempts == 1
+    assert first[0].retryable is True
     assert first[0].error == "temporary delivery failure"
     assert blocked == []
     assert second[0].status == "delivered"
@@ -339,6 +495,7 @@ def test_exhausted_attempts_move_to_dead_letter_and_can_be_requeued(data_dir: Pa
 
     assert requeued.status == "pending"
     assert requeued.attempts == 0
+    assert get_alert_retry_schedule(metadata_path, outbox_id) is None
     assert list_alert_dead_letters(metadata_path) == []
     history = list_alert_dead_letters(metadata_path, active_only=False)
     assert len(history) == 1
