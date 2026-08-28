@@ -180,11 +180,16 @@ def _deterministic_answer(question: str, observations: list[Observation]) -> Ask
     return AskResponse(answer=answer, evidence=evidence)
 
 
+def _etag_opaque_value(etag: str) -> str:
+    return etag[2:] if etag.startswith("W/") else etag
+
+
 def _etag_matches(if_none_match: str | None, etag: str) -> bool:
     if not if_none_match:
         return False
+    expected = _etag_opaque_value(etag)
     candidates = {item.strip() for item in if_none_match.split(",")}
-    return "*" in candidates or etag in candidates
+    return "*" in candidates or any(_etag_opaque_value(item) == expected for item in candidates)
 
 
 def create_app(
@@ -277,7 +282,7 @@ def create_app(
     @app.get(
         "/api/agent/products/{sku}/evidence",
         response_model=None,
-        responses={304: {"description": "Evidence unchanged for supplied ETag"}},
+        responses={304: {"description": "Semantic evidence unchanged for supplied ETag"}},
     )
     def agent_evidence(sku: str, request: Request) -> Response:
         if not product_exists(sku):
@@ -294,7 +299,7 @@ def create_app(
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-        etag = f'"sha256:{pack.evidence_sha256}"'
+        etag = f'W/"sha256:{pack.evidence_sha256}"'
         headers = {
             "ETag": etag,
             "Cache-Control": "private, max-age=0, must-revalidate",
