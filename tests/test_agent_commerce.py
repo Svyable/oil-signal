@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from decimal import Decimal
 from pathlib import Path
 
@@ -17,6 +18,7 @@ FIXTURE = Path(__file__).parent / "fixtures" / "petroleum_weekly.csv"
 
 class FakePaymentGateway:
     protocol = "mpp"
+    credential_headers = ("Authorization",)
 
     def __init__(self) -> None:
         self.challenges: list[PaymentRequirement] = []
@@ -31,28 +33,63 @@ class FakePaymentGateway:
         return PaymentChallenge(
             protocol=self.protocol,
             challenge_id=f"challenge-{len(self.challenges)}",
-            www_authenticate=(
-                'Payment id="challenge-1", method="test", intent="charge"'
-            ),
+            response_headers={
+                "WWW-Authenticate": 'Payment id="challenge-1", method="test", intent="charge"'
+            },
         )
 
     def verify(
         self,
-        authorization: str,
+        request_headers: Mapping[str, str],
         requirement: PaymentRequirement,
     ) -> VerifiedPayment:
         if self.unavailable:
             raise PaymentGatewayUnavailable("payment service unavailable")
         self.verifications.append(requirement)
+        authorization = request_headers.get("authorization") or request_headers.get("Authorization")
         if authorization != "Payment paid-credential":
-            raise PaymentRejected("payment credential was rejected")
+            detail = (
+                "payment credential is required"
+                if authorization is None
+                else "payment credential was rejected"
+            )
+            raise PaymentRejected(detail)
         external_id = "wrong-external-id" if self.mismatched_receipt else requirement.external_id
         return VerifiedPayment(
             protocol=self.protocol,
-            receipt_header="receipt-token",
+            response_headers={"Payment-Receipt": "receipt-token"},
             external_id=external_id,
             reference="settlement-123",
             payer="agent:buyer",
+        )
+
+
+class FakeX402Gateway:
+    protocol = "x402-v2"
+    credential_headers = ("PAYMENT-SIGNATURE",)
+
+    def challenge(self, requirement: PaymentRequirement) -> PaymentChallenge:
+        return PaymentChallenge(
+            protocol=self.protocol,
+            challenge_id="x402-challenge",
+            response_headers={"PAYMENT-REQUIRED": "payment-required-token"},
+        )
+
+    def verify(
+        self,
+        request_headers: Mapping[str, str],
+        requirement: PaymentRequirement,
+    ) -> VerifiedPayment:
+        signature = request_headers.get("payment-signature") or request_headers.get(
+            "PAYMENT-SIGNATURE"
+        )
+        if signature != "paid-signature":
+            raise PaymentRejected("PAYMENT-SIGNATURE header is required")
+        return VerifiedPayment(
+            protocol=self.protocol,
+            response_headers={"PAYMENT-RESPONSE": "settled-token"},
+            external_id=requirement.external_id,
+            reference="x402-settlement",
         )
 
 
@@ -76,6 +113,7 @@ def test_paid_evidence_returns_402_without_leaking_pack(data_dir: Path) -> None:
     assert response.status_code == 402
     assert response.headers["www-authenticate"].startswith("Payment ")
     assert response.headers["cache-control"] == "no-store"
+    assert response.headers["vary"] == "Authorization"
     payload = response.json()
     assert payload["status"] == 402
     assert payload["sku"] == "weekly-petroleum-evidence"
@@ -188,3 +226,31 @@ def test_mismatched_receipt_binding_is_rejected(data_dir: Path) -> None:
 
     assert response.status_code == 502
     assert "different evidence requirement" in response.json()["detail"]
+
+
+def test_protocol_adapter_can_use_x402_style_payment_headers(data_dir: Path) -> None:
+    FixtureIngestor(data_dir).ingest_csv(FIXTURE)
+    gateway = FakeX402Gateway()
+    client = TestClient(
+        create_app(
+            data_dir,
+            agent_unit_price_usd=Decimal("0.05"),
+            payment_gateway=gateway,
+        )
+    )
+
+    challenge = client.get("/api/agent/products/crude-balance-evidence/evidence")
+    paid = client.get(
+        "/api/agent/products/crude-balance-evidence/evidence",
+        headers={"PAYMENT-SIGNATURE": "paid-signature"},
+    )
+
+    assert challenge.status_code == 402
+    assert challenge.headers["payment-required"] == "payment-required-token"
+    assert "www-authenticate" not in challenge.headers
+    assert challenge.headers["vary"] == "PAYMENT-SIGNATURE"
+    assert paid.status_code == 200
+    assert paid.headers["payment-response"] == "settled-token"
+    assert paid.headers["x-oilsignal-payment-protocol"] == "x402-v2"
+    quote = client.get("/api/agent/products/crude-balance-evidence/quote").json()
+    assert quote["payment_protocols"] == ["x402-v2"]
