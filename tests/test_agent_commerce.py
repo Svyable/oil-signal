@@ -239,11 +239,9 @@ def test_protocol_adapter_can_use_x402_style_payment_headers(data_dir: Path) -> 
         )
     )
 
-    challenge = client.get("/api/agent/products/crude-balance-evidence/evidence")
-    paid = client.get(
-        "/api/agent/products/crude-balance-evidence/evidence",
-        headers={"PAYMENT-SIGNATURE": "paid-signature"},
-    )
+    path = "/api/agent/products/weekly-petroleum-evidence/evidence"
+    challenge = client.get(path)
+    paid = client.get(path, headers={"PAYMENT-SIGNATURE": "paid-signature"})
 
     assert challenge.status_code == 402
     assert challenge.headers["payment-required"] == "payment-required-token"
@@ -252,5 +250,5 @@ def test_protocol_adapter_can_use_x402_style_payment_headers(data_dir: Path) -> 
     assert paid.status_code == 200
     assert paid.headers["payment-response"] == "settled-token"
     assert paid.headers["x-oilsignal-payment-protocol"] == "x402-v2"
-    quote = client.get("/api/agent/products/crude-balance-evidence/quote").json()
+    quote = client.get("/api/agent/products/weekly-petroleum-evidence/quote").json()
     assert quote["payment_protocols"] == ["x402-v2"]
