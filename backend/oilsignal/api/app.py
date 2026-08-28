@@ -56,6 +56,20 @@ from oilsignal.reports.specialized import (
 from oilsignal.reports.weekly import WeeklyPetroleumBrief
 from oilsignal.storage.datasets import DataStatus, inspect_data, load_latest_observations
 
+_RESERVED_COMMERCE_HEADERS = {
+    "cache-control",
+    "content-length",
+    "content-type",
+    "etag",
+    "vary",
+    "x-oilsignal-evidence-sha256",
+    "x-oilsignal-sku",
+    "x-oilsignal-payment-protocol",
+    "x-oilsignal-payment-reference",
+    "x-oilsignal-payment-payer",
+    "x-oilsignal-payment-external-id",
+}
+
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=3, max_length=500)
@@ -200,6 +214,22 @@ def _etag_matches(if_none_match: str | None, etag: str) -> bool:
     return "*" in candidates or any(_etag_opaque_value(item) == expected for item in candidates)
 
 
+def _commerce_headers(
+    protocol_headers: dict[str, str],
+    core_headers: dict[str, str],
+) -> dict[str, str]:
+    collisions = sorted(
+        key for key in protocol_headers if key.lower() in _RESERVED_COMMERCE_HEADERS
+    )
+    if collisions:
+        joined = ", ".join(collisions)
+        raise HTTPException(
+            status_code=502,
+            detail=f"payment adapter attempted to override reserved headers: {joined}",
+        )
+    return {**protocol_headers, **core_headers}
+
+
 def create_app(
     data_dir: Path | None = None,
     *,
@@ -219,18 +249,8 @@ def create_app(
         allow_origins=["http://localhost:5173", "http://localhost:3000"],
         allow_credentials=False,
         allow_methods=["GET", "POST"],
-        allow_headers=["Content-Type", "Authorization", "If-None-Match"],
-        expose_headers=[
-            "ETag",
-            "WWW-Authenticate",
-            "Payment-Receipt",
-            "X-OilSignal-Evidence-SHA256",
-            "X-OilSignal-SKU",
-            "X-OilSignal-Payment-Protocol",
-            "X-OilSignal-Payment-Reference",
-            "X-OilSignal-Payment-Payer",
-            "X-OilSignal-Payment-External-ID",
-        ],
+        allow_headers=["*"],
+        expose_headers=["*"],
     )
 
     def current_evidence_context() -> tuple[list[Observation], DataStatus, DatasetFreshness]:
@@ -245,6 +265,12 @@ def create_app(
 
     def commerce_active() -> bool:
         return app.state.payment_gateway is not None and app.state.agent_unit_price_usd is not None
+
+    def gateway_vary_header() -> str | None:
+        gateway = app.state.payment_gateway
+        if gateway is None or not gateway.credential_headers:
+            return None
+        return ", ".join(gateway.credential_headers)
 
     def agent_catalog() -> AgentCatalog:
         catalog = build_agent_catalog(
@@ -294,15 +320,17 @@ def create_app(
             payment_protocol=challenge.protocol,
             challenge_id=challenge.challenge_id,
         )
-        headers = {
-            "WWW-Authenticate": challenge.www_authenticate,
+        core_headers = {
             "Cache-Control": "no-store",
-            "Vary": "Authorization",
             "X-OilSignal-Evidence-SHA256": requirement.evidence_sha256,
             "X-OilSignal-SKU": requirement.sku,
             "X-OilSignal-Payment-Protocol": challenge.protocol,
             "X-OilSignal-Payment-External-ID": requirement.external_id,
         }
+        vary = gateway_vary_header()
+        if vary:
+            core_headers["Vary"] = vary
+        headers = _commerce_headers(challenge.response_headers, core_headers)
         return JSONResponse(
             status_code=402,
             content=problem.model_dump(mode="json"),
@@ -401,10 +429,12 @@ def create_app(
         headers = {
             "ETag": etag,
             "Cache-Control": "private, max-age=0, must-revalidate",
-            "Vary": "Authorization",
             "X-OilSignal-Evidence-SHA256": pack.evidence_sha256,
             "X-OilSignal-SKU": pack.sku,
         }
+        vary = gateway_vary_header()
+        if vary:
+            headers["Vary"] = vary
         if _etag_matches(request.headers.get("if-none-match"), etag):
             return Response(status_code=304, headers=headers)
 
@@ -418,11 +448,8 @@ def create_app(
                 evidence_sha256=pack.evidence_sha256,
                 description=pack.title,
             )
-            authorization = request.headers.get("authorization")
-            if not authorization:
-                return payment_required_response(requirement, "payment credential is required")
             try:
-                verified = gateway.verify(authorization, requirement)
+                verified = gateway.verify(dict(request.headers), requirement)
             except PaymentRejected as exc:
                 return payment_required_response(requirement, exc.detail)
             except PaymentGatewayUnavailable as exc:
@@ -437,17 +464,18 @@ def create_app(
                     status_code=502,
                     detail="payment adapter returned a receipt for a different evidence requirement",
                 )
-            headers.update(
-                {
-                    "Payment-Receipt": verified.receipt_header,
-                    "X-OilSignal-Payment-Protocol": verified.protocol,
-                    "X-OilSignal-Payment-External-ID": verified.external_id,
-                }
-            )
+            payment_headers = {
+                "X-OilSignal-Payment-Protocol": verified.protocol,
+                "X-OilSignal-Payment-External-ID": verified.external_id,
+            }
             if verified.reference:
-                headers["X-OilSignal-Payment-Reference"] = verified.reference
+                payment_headers["X-OilSignal-Payment-Reference"] = verified.reference
             if verified.payer:
-                headers["X-OilSignal-Payment-Payer"] = verified.payer
+                payment_headers["X-OilSignal-Payment-Payer"] = verified.payer
+            headers = _commerce_headers(
+                verified.response_headers,
+                {**headers, **payment_headers},
+            )
 
         return JSONResponse(content=pack.model_dump(mode="json"), headers=headers)
 
