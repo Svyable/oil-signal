@@ -84,7 +84,9 @@ The community outbox is **at least once**, not exactly once.
 
 If a worker dies before provider acceptance, an expired lease allows another worker to retry. If a provider call fails, the row backs off and retries. If a worker dies **after** provider acceptance but **before** local acknowledgement, the message may be delivered again after the lease expires.
 
-Production adapters should use a stable provider idempotency key derived from `outbox_id` whenever supported. No local transaction can make an arbitrary external network call exactly-once.
+Every delivery adapter now receives the durable `outbox_id` as its `idempotency_key`. The built-in webhook adapter sends that same ID on every retry through both `Idempotency-Key` and `X-OilSignal-Outbox-ID` headers. Receiver-side atomic deduplication is still required for effectively-once external side effects.
+
+No local transaction can make an arbitrary external network call exactly once.
 
 ## CLI
 
@@ -100,7 +102,7 @@ Use `--stateless` for a dry run that never mutates alert state:
 oilsignal alerts-evaluate --rules examples/alerts.example.json --data-dir ./data --stateless
 ```
 
-Drain eligible rows:
+Drain eligible rows to stdout:
 
 ```bash
 oilsignal alerts-deliver \
@@ -112,6 +114,16 @@ oilsignal alerts-deliver \
   --base-backoff-seconds 30 \
   --max-backoff-seconds 3600
 ```
+
+Or configure a webhook and drain through HTTPS:
+
+```bash
+export OILSIGNAL_ALERT_WEBHOOK_URL='https://alerts.example.test/oilsignal'
+export OILSIGNAL_ALERT_WEBHOOK_SIGNING_SECRET='...'
+oilsignal alerts-deliver --adapter webhook --data-dir ./data
+```
+
+Secrets are environment-only. See [`webhook-delivery.md`](webhook-delivery.md) for authentication, signature, HTTPS, and receiver deduplication requirements.
 
 Each attempted row returns a receipt containing worker ID, status, attempt count, and timing/error details. Failed, dead-lettered, or lease-lost receipts make the command exit non-zero.
 
@@ -128,6 +140,6 @@ The SQLite lease design supports multiple processes on a **single host/shared SQ
 
 ## Adapter boundary
 
-An adapter exposes `name` plus `send(payload_json)`. Email, Slack, Teams, webhook, or commercial managed-delivery integrations can implement that boundary without changing policy evaluation or evidence semantics.
+An adapter exposes `name` plus `send(payload_json, *, idempotency_key)`. Email, Slack, Teams, webhook, or commercial managed-delivery integrations can implement that boundary without changing policy evaluation or evidence semantics.
 
-Adapters must preserve provenance and should propagate `outbox_id` as provider metadata/idempotency whenever possible.
+Adapters must preserve provenance and propagate the stable idempotency key whenever the downstream system supports deduplication. The built-in webhook adapter is the reference implementation of this contract.

@@ -7,7 +7,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from oilsignal.alerts.delivery import ConsoleOutboxDelivery, DeliveryPolicy, flush_alert_outbox
+from oilsignal.alerts.delivery import (
+    ConsoleOutboxDelivery,
+    DeliveryPolicy,
+    OutboxDeliveryAdapter,
+    WebhookOutboxDelivery,
+    flush_alert_outbox,
+)
 from oilsignal.alerts.engine import (
     AlertPolicySet,
     evaluate_policies,
@@ -85,7 +91,8 @@ def build_parser() -> argparse.ArgumentParser:
         "alerts-deliver",
         help="drain eligible alert rows with leases, backoff, and dead-lettering",
     )
-    deliver.add_argument("--adapter", choices=["console"], default="console")
+    deliver.add_argument("--adapter", choices=["console", "webhook"], default="console")
+    deliver.add_argument("--webhook-url", help="override OILSIGNAL_ALERT_WEBHOOK_URL")
     deliver.add_argument("--data-dir", type=Path, default=settings.data_dir)
     deliver.add_argument("--limit", type=int, default=100)
     deliver.add_argument("--worker-id")
@@ -129,6 +136,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "alerts-deliver":
         return _alerts_deliver(
             args.adapter,
+            args.webhook_url,
             args.data_dir,
             args.limit,
             args.worker_id,
@@ -216,6 +224,7 @@ def _alerts_evaluate(rules_path: Path, data_dir: Path, stateless: bool) -> int:
 
 def _alerts_deliver(
     adapter_name: str,
+    webhook_url: str | None,
     data_dir: Path,
     limit: int,
     worker_id: str | None,
@@ -224,8 +233,7 @@ def _alerts_deliver(
     base_backoff_seconds: int,
     max_backoff_seconds: int,
 ) -> int:
-    if adapter_name != "console":
-        raise ValueError(f"unsupported delivery adapter: {adapter_name}")
+    adapter = _build_delivery_adapter(adapter_name, webhook_url)
     policy = DeliveryPolicy(
         lease_seconds=lease_seconds,
         max_attempts=max_attempts,
@@ -234,7 +242,7 @@ def _alerts_deliver(
     )
     receipts = flush_alert_outbox(
         data_dir / "metadata.sqlite",
-        ConsoleOutboxDelivery(),
+        adapter,
         limit=limit,
         worker_id=worker_id,
         policy=policy,
@@ -242,6 +250,38 @@ def _alerts_deliver(
     print(json.dumps([receipt.model_dump(mode="json") for receipt in receipts], indent=2))
     bad_statuses = {"failed", "dead_letter", "lease_lost"}
     return 1 if any(receipt.status in bad_statuses for receipt in receipts) else 0
+
+
+def _build_delivery_adapter(
+    adapter_name: str,
+    webhook_url: str | None = None,
+) -> OutboxDeliveryAdapter:
+    if adapter_name == "console":
+        return ConsoleOutboxDelivery()
+    if adapter_name == "webhook":
+        endpoint = webhook_url or settings.alert_webhook_url
+        if not endpoint:
+            raise SystemExit(
+                "webhook delivery requires --webhook-url or OILSIGNAL_ALERT_WEBHOOK_URL"
+            )
+        bearer_token = (
+            settings.alert_webhook_bearer_token.get_secret_value()
+            if settings.alert_webhook_bearer_token
+            else None
+        )
+        signing_secret = (
+            settings.alert_webhook_signing_secret.get_secret_value()
+            if settings.alert_webhook_signing_secret
+            else None
+        )
+        return WebhookOutboxDelivery(
+            endpoint,
+            bearer_token=bearer_token,
+            signing_secret=signing_secret,
+            timeout_seconds=settings.alert_webhook_timeout_seconds,
+            allow_insecure_http=settings.alert_webhook_allow_insecure_http,
+        )
+    raise ValueError(f"unsupported delivery adapter: {adapter_name}")
 
 
 def _alerts_dead_letters(data_dir: Path, limit: int) -> int:
