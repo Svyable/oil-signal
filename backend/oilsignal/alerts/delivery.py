@@ -46,6 +46,7 @@ class WebhookOutboxDelivery:
         bearer_token: str | None = None,
         signing_secret: str | None = None,
         timeout_seconds: float = 10.0,
+        allow_insecure_http: bool = False,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         parsed = urlparse(endpoint)
@@ -53,6 +54,10 @@ class WebhookOutboxDelivery:
             raise ValueError("webhook endpoint must be an absolute http(s) URL")
         if parsed.username or parsed.password:
             raise ValueError("webhook endpoint must not contain embedded credentials")
+        if parsed.scheme == "http" and not allow_insecure_http:
+            raise ValueError(
+                "webhook endpoint must use https unless insecure HTTP is explicitly enabled"
+            )
         if timeout_seconds <= 0:
             raise ValueError("webhook timeout_seconds must be positive")
         self.endpoint = endpoint
