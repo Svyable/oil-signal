@@ -31,6 +31,7 @@ class VerifiedPayment(BaseModel):
 
     protocol: str
     receipt_header: str = Field(min_length=1)
+    external_id: str = Field(min_length=1)
     reference: str | None = None
     payer: str | None = None
 
@@ -47,7 +48,9 @@ class PaymentProblem(BaseModel):
     currency: str
     evidence_sha256: str
     external_id: str
+    resource_path: str
     payment_protocol: str
+    challenge_id: str | None = None
 
 
 class PaymentGatewayError(RuntimeError):
@@ -73,6 +76,10 @@ class PaymentGateway(Protocol):
     rail. The core passes the exact evidence-bound requirement into both challenge
     generation and verification; adapters are responsible for settlement,
     credential replay protection, and provider-specific receipt semantics.
+
+    Successful verification must echo ``requirement.external_id`` in
+    ``VerifiedPayment.external_id``. OilSignal rejects mismatches before serving
+    the Evidence Pack.
     """
 
     protocol: str
