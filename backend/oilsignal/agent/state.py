@@ -45,7 +45,7 @@ def build_agent_product_state(pack: EvidencePack, quote: AgentQuote) -> AgentPro
         "evidence_sha256": pack.evidence_sha256,
         "data_source": pack.data_source,
         "source_fetched_at": pack.source_fetched_at,
-        "freshness": pack.freshness.model_dump(mode="json"),
+        "freshness": _freshness_semantics(pack.freshness),
         "fulfillment_available": fulfillment_available,
         "available_for_purchase": quote.available_for_purchase,
         "price": quote.price.model_dump(mode="json") if quote.price else None,
@@ -70,6 +70,20 @@ def build_agent_product_state(pack: EvidencePack, quote: AgentQuote) -> AgentPro
         payment_protocols=quote.payment_protocols,
         state_sha256=_fingerprint(semantics),
     )
+
+
+def _freshness_semantics(freshness: DatasetFreshness) -> dict[str, object]:
+    return {
+        "status": freshness.status.value,
+        "latest_observation": (
+            freshness.latest_observation.isoformat() if freshness.latest_observation else None
+        ),
+        "expected_week_ending": (
+            freshness.expected_week_ending.isoformat() if freshness.expected_week_ending else None
+        ),
+        "stale_series": freshness.stale_series,
+        "live_series_count": freshness.live_series_count,
+    }
 
 
 def _fingerprint(payload: object) -> str:
