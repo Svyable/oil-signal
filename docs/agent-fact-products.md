@@ -21,7 +21,7 @@ Fact products make that unit of work explicit:
 - a stable `evidence_sha256` for the fact payload;
 - no unrelated petroleum observations in the purchased evidence.
 
-Fact products are smaller products, but the community runtime currently uses the same configured `OILSIGNAL_AGENT_EVIDENCE_PACK_PRICE_USD` for every agent product. Deployments that need differentiated commercial pricing should implement that as a separate pricing-policy layer rather than advertising one amount and charging another.
+Fact products can be priced independently from broader briefs through `OILSIGNAL_AGENT_SKU_PRICES`, with `OILSIGNAL_AGENT_EVIDENCE_PACK_PRICE_USD` retained as the fallback amount for SKUs without an override. An explicit JSON `null` keeps one SKU unpriced even when the fallback is configured. See [`agent-pricing.md`](agent-pricing.md).
 
 ## Discovery
 
@@ -104,7 +104,7 @@ Example structure:
 }
 ```
 
-The evidence digest changes when the cited observation value, source identity, raw hash, calculation, or claim semantics change. Runtime generation timestamps do not define semantic evidence identity.
+The evidence digest changes when the cited observation value, source identity, raw hash, calculation, or claim semantics change. Runtime generation timestamps and commercial price changes do not define semantic evidence identity.
 
 ## Product supplied means demand proxy
 
@@ -126,14 +126,16 @@ discover
   -> 304 when evidence + commercial terms are unchanged
   -> inspect freshness / as_of / price
   -> request /evidence only when the fact is wanted
-  -> satisfy 402 when payment enforcement is configured
+  -> satisfy 402 when payment enforcement is configured for that SKU
   -> receive evidence + receipt + local fulfillment audit ID
 ```
 
 A fact whose maintained series is not present in the current local dataset returns `409` before the payment gateway is challenged or verified. OilSignal does not charge for evidence it cannot build.
 
+Price is part of product state, not evidence identity. A price-only change updates `state_sha256` while leaving `evidence_sha256` unchanged, so agents should poll `/state` when commercial changes matter.
+
 ## Open-core behavior
 
-When no price and payment gateway are configured, fact products are ordinary self-hosted evidence endpoints. Configuring a price without a gateway advertises a price but does not enforce payment, matching the existing Evidence Pack behavior.
+When a fact SKU has no resolved price, it is an ordinary self-hosted evidence endpoint even if other SKUs on the same process are paid. Configuring a resolved price without a gateway advertises the price but does not enforce payment, matching the broader Evidence Pack behavior.
 
 This feature does not add a wallet, settlement provider, marketplace, trading recommendation, price prediction, or proprietary petroleum source.
