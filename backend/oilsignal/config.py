@@ -8,7 +8,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Runtime settings with safe local defaults."""
 
-    model_config = SettingsConfigDict(env_prefix="OILSIGNAL_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="OILSIGNAL_",
+        env_file=".env",
+        env_ignore_empty=True,
+        extra="ignore",
+    )
 
     data_dir: Path = Path("./data")
     eia_api_key: str | None = None
