@@ -2,7 +2,7 @@
 
 OilSignal's paid Evidence Pack path is intentionally split into two responsibilities:
 
-- **OilSignal core** defines the product, price, evidence digest, freshness policy, HTTP 402 orchestration, and receipt/evidence binding checks.
+- **OilSignal core** defines the product, price, evidence digest, freshness policy, HTTP 402 orchestration, receipt/evidence binding checks, and local paid-fulfillment audit.
 - A **payment service** implements the actual machine-payment protocol, credential verification, settlement/credit consumption, replay protection, and protocol-specific HTTP headers.
 
 The repository does not ship a fake settlement provider. It does ship a small HTTP bridge so a hosted operator can connect a real verifier/settlement service without writing Python inside OilSignal.
@@ -192,13 +192,14 @@ x402-v2-shaped success:   PAYMENT-RESPONSE: ...
 
 These are header-shape compatibility examples, not claims that OilSignal performs those protocols' settlement itself.
 
-OilSignal additionally emits vendor-neutral binding metadata after successful verification:
+OilSignal additionally emits vendor-neutral binding and reconciliation metadata after successful verification and audit commit:
 
 ```text
 X-OilSignal-Payment-Protocol: <protocol>
 X-OilSignal-Payment-External-ID: oilsignal:<sku>:sha256:<digest>
 X-OilSignal-Payment-Reference: <optional reference>
 X-OilSignal-Payment-Payer: <optional payer>
+X-OilSignal-Fulfillment-Audit-ID: ful_...
 ```
 
 Do not put secrets, raw payment credentials, private keys, or bearer tokens into these metadata fields.
@@ -219,19 +220,52 @@ X-OilSignal-Payment-Protocol
 X-OilSignal-Payment-Reference
 X-OilSignal-Payment-Payer
 X-OilSignal-Payment-External-ID
+X-OilSignal-Fulfillment-Audit-ID
 ```
 
 The HTTP bridge also rejects malformed header names, CR/LF in values, excessively long values, and excessive header counts before those headers reach FastAPI.
+
+## Durable fulfillment audit
+
+Every paid Evidence Pack that OilSignal actually serves gets an append-only local fulfillment event. The paid path is deliberately ordered as:
+
+```text
+build/freshness-check evidence
+-> free unchanged 304 check
+-> payment verification
+-> protocol/external-id binding checks
+-> reserved-header checks
+-> commit fulfillment audit
+-> serve purchased Evidence Pack
+```
+
+If audit storage cannot commit, OilSignal returns 503 and does not serve the purchased claims. This makes “paid response served” and “local fulfillment event exists” a strong MVP invariant.
+
+There is still an unavoidable distributed-systems ambiguity if the payment provider accepts a charge immediately before OilSignal crashes or fails to commit locally. Production payment services therefore must keep the idempotency/replay semantics described below so a buyer can safely retry the same evidence-bound requirement.
+
+The audit stores non-secret reconciliation metadata only: event ID, timestamp, external ID, SKU, evidence digest, amount/currency, resource path, protocol, optional gateway reference, and optional non-secret payer identity. Buyer credentials, protocol receipt headers, operator gateway bearer tokens, private keys, and provider response bodies are not stored.
+
+`external_id` is an evidence identity, not a unique purchase ID. Multiple successful fulfillment events may legitimately share it, so the audit must not be treated as a revenue ledger. Reconcile it with the payment provider's settlement records using `external_id` and `gateway_reference`.
+
+Operators can inspect the local audit without exposing payer/reference metadata over an unauthenticated HTTP admin endpoint:
+
+```bash
+oilsignal commerce-audit --data-dir ./data
+oilsignal commerce-audit --data-dir ./data --gateway-reference settlement-123
+oilsignal commerce-audit --data-dir ./data --external-id 'oilsignal:<sku>:sha256:<digest>'
+```
+
+See [`commerce-audit.md`](commerce-audit.md) for storage fields, retry semantics, CLI filters, and the SQLite deployment boundary.
 
 ## Free conditional revalidation
 
 OilSignal checks the Evidence Pack's semantic ETag before payment verification.
 
-A matching `If-None-Match` returns 304 without calling the payment service. The remote verifier is therefore invoked only when the buyer is about to receive changed semantic evidence:
+A matching `If-None-Match` returns 304 without calling the payment service or appending a fulfillment audit event. The remote verifier is therefore invoked only when the buyer is about to receive changed semantic evidence:
 
 ```text
-poll -> unchanged -> 304 -> no payment service call
-poll -> changed -> 402/verify -> paid fulfillment
+poll -> unchanged -> 304 -> no payment service call / no audit event
+poll -> changed -> 402/verify -> audit commit -> paid fulfillment
 ```
 
 ## Security responsibilities of the payment service
@@ -242,7 +276,7 @@ A production payment service still must handle:
 2. **Replay protection** — prevent a single-use credential/payment from authorizing unintended repeat purchases when the rail requires single use.
 3. **Requirement binding** — bind settlement to amount, currency, resource, and OilSignal `external_id`/evidence digest.
 4. **Settlement state** — do not return success before the rail-specific success condition is satisfied.
-5. **Idempotency** — safely handle retries and network ambiguity according to the payment rail's semantics.
+5. **Idempotency** — safely handle retries and network/storage ambiguity, including a verified payment followed by an OilSignal audit-write failure.
 6. **Secret handling** — keep private keys, wallet material, card/provider secrets, and raw credentials out of logs and returned metadata.
 7. **Currency/amount validation** — verify the exact `PaymentRequirement` rather than trusting buyer-supplied price fields.
 8. **Auditability** — return a stable non-secret `reference` when available so an operator can reconcile fulfillment with provider records.
@@ -258,6 +292,7 @@ remote transport/non-2xx         -> 503
 malformed remote payload/header  -> 503
 protocol/external-id mismatch    -> 502 enforced by OilSignal
 reserved-header collision        -> 502 enforced by OilSignal
+local fulfillment-audit failure  -> 503 before evidence is served
 ```
 
 ## Custom in-process integration
@@ -272,8 +307,15 @@ app = create_app(
 )
 ```
 
+Custom gateways get the same OilSignal fulfillment-audit behavior because the audit is enforced at the API fulfillment boundary, not inside `HttpPaymentGateway`.
+
 Use `oilsignal.api.app:app` only when you intentionally want the ungated core module-level application. Use `oilsignal.api.server:app` for normal runtime configuration, including the optional HTTP payment bridge.
 
 ## Next after MVP
 
-Keep payment rails separate from the evidence schema. The most useful follow-up is durable purchase/receipt audit storage keyed by `external_id` and gateway `reference`; rail-specific hosted MPP/x402/account-credit services can then integrate behind the existing HTTP contract without changing Evidence Packs.
+Keep payment rails separate from the evidence schema and fulfillment audit. Useful hosted follow-ups are:
+
+- move commerce audit state to the hosted server database for horizontally distributed deployments;
+- add real MPP, x402, or organization-credit services behind the existing remote gateway contract;
+- add SKU/contract-specific price policies without changing Evidence Pack schemas;
+- optionally add seller-signed fulfillment receipts when buyers need cryptographic proof independent of the payment rail.
