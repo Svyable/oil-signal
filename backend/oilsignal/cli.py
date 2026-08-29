@@ -32,6 +32,7 @@ from oilsignal.reports.specialized import (
     RefineryUtilizationWatch,
 )
 from oilsignal.reports.weekly import WeeklyPetroleumBrief
+from oilsignal.storage.commerce import list_paid_fulfillments
 from oilsignal.storage.datasets import inspect_data, load_latest_observations
 from oilsignal.storage.metadata import list_alert_dead_letters, requeue_alert_dead_letter
 
@@ -120,6 +121,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     requeue.add_argument("--outbox-id", required=True)
     requeue.add_argument("--data-dir", type=Path, default=settings.data_dir)
+
+    commerce_audit = subparsers.add_parser(
+        "commerce-audit",
+        help="list paid Evidence Pack fulfillment audit events",
+    )
+    commerce_audit.add_argument("--data-dir", type=Path, default=settings.data_dir)
+    commerce_audit.add_argument("--external-id")
+    commerce_audit.add_argument("--gateway-reference")
+    commerce_audit.add_argument("--sku")
+    commerce_audit.add_argument("--limit", type=int, default=100)
     return parser
 
 
@@ -156,6 +167,14 @@ def main(argv: list[str] | None = None) -> int:
         return _alerts_dead_letters(args.data_dir, args.limit)
     if args.command == "alerts-requeue":
         return _alerts_requeue(args.data_dir, args.outbox_id)
+    if args.command == "commerce-audit":
+        return _commerce_audit(
+            args.data_dir,
+            args.external_id,
+            args.gateway_reference,
+            args.sku,
+            args.limit,
+        )
     raise RuntimeError(f"unhandled command: {args.command}")
 
 
@@ -306,6 +325,24 @@ def _alerts_requeue(data_dir: Path, outbox_id: str) -> int:
         now=datetime.now(UTC),
     )
     print(json.dumps(row.model_dump(mode="json"), indent=2))
+    return 0
+
+
+def _commerce_audit(
+    data_dir: Path,
+    external_id: str | None,
+    gateway_reference: str | None,
+    sku: str | None,
+    limit: int,
+) -> int:
+    rows = list_paid_fulfillments(
+        data_dir / "metadata.sqlite",
+        external_id=external_id,
+        gateway_reference=gateway_reference,
+        sku=sku,
+        limit=limit,
+    )
+    print(json.dumps([row.model_dump(mode="json") for row in rows], indent=2))
     return 0
 
 
