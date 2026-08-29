@@ -25,6 +25,7 @@ from oilsignal.agent.products import (
     product_exists,
     quote_agent_product,
 )
+from oilsignal.agent.state import AgentProductState, build_agent_product_state
 from oilsignal.alerts.engine import (
     AlertEvaluationResult,
     AlertPolicySet,
@@ -402,6 +403,47 @@ def create_app(
                 "payment_protocols": [gateway.protocol],
             }
         )
+
+    @app.get(
+        "/api/agent/products/{sku}/state",
+        response_model=None,
+        responses={
+            304: {"description": "Product evidence and commercial state unchanged"},
+            409: {"description": "Product state cannot be built from the current dataset"},
+        },
+    )
+    def agent_state(sku: str, request: Request) -> Response:
+        if not product_exists(sku):
+            raise HTTPException(status_code=404, detail=f"unknown agent product: {sku}")
+        try:
+            data_status = inspect_data(app.state.data_dir)
+            observations = load_latest_observations(app.state.data_dir)
+            freshness = check_wpsr_freshness(
+                observations,
+                live_eia=data_status.is_live_eia,
+            )
+            pack = build_evidence_pack(
+                sku,
+                observations,
+                freshness=freshness,
+                data_source=data_status.source,
+                source_fetched_at=data_status.latest_fetched_at,
+            )
+            state = build_agent_product_state(pack, agent_quote(sku))
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        etag = f'W/"sha256:{state.state_sha256}"'
+        headers = {
+            "ETag": etag,
+            "Cache-Control": "private, max-age=0, must-revalidate",
+            "X-OilSignal-State-SHA256": state.state_sha256,
+            "X-OilSignal-Evidence-SHA256": state.evidence_sha256,
+            "X-OilSignal-SKU": state.sku,
+        }
+        if _etag_matches(request.headers.get("if-none-match"), etag):
+            return Response(status_code=304, headers=headers)
+        return JSONResponse(content=state.model_dump(mode="json"), headers=headers)
 
     @app.get(
         "/api/agent/products/{sku}/evidence",
