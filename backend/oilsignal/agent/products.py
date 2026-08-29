@@ -34,6 +34,7 @@ class AgentProduct(BaseModel):
     name: str
     description: str
     method: str = "GET"
+    state_path: str
     evidence_path: str
     quote_path: str
     response_media_type: str = "application/json"
@@ -184,6 +185,7 @@ def build_agent_catalog(
             sku=definition.sku,
             name=definition.name,
             description=definition.description,
+            state_path=f"/api/agent/products/{definition.sku}/state",
             evidence_path=f"/api/agent/products/{definition.sku}/evidence",
             quote_path=f"/api/agent/products/{definition.sku}/quote",
             evidence_guarantees=[
