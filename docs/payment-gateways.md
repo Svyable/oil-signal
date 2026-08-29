@@ -2,7 +2,7 @@
 
 OilSignal's paid Evidence Pack path is intentionally split into two responsibilities:
 
-- **OilSignal core** defines the product, price, evidence digest, freshness policy, HTTP 402 orchestration, receipt/evidence binding checks, and local paid-fulfillment audit.
+- **OilSignal core** defines the product, resolved price, evidence digest, freshness policy, HTTP 402 orchestration, receipt/evidence binding checks, and local paid-fulfillment audit.
 - A **payment service** implements the actual machine-payment protocol, credential verification, settlement/credit consumption, replay protection, and protocol-specific HTTP headers.
 
 The repository does not ship a fake settlement provider. It does ship a small HTTP bridge so a hosted operator can connect a real verifier/settlement service without writing Python inside OilSignal.
@@ -15,12 +15,15 @@ Minimum production configuration:
 
 ```bash
 export OILSIGNAL_AGENT_EVIDENCE_PACK_PRICE_USD='0.05'
+export OILSIGNAL_AGENT_SKU_PRICES='{"fact-us-crude-stocks":"0.005"}'
 export OILSIGNAL_AGENT_PRICE_CURRENCY='USD'
 export OILSIGNAL_AGENT_PAYMENT_GATEWAY_URL='https://payments.example.com/oilsignal'
 export OILSIGNAL_AGENT_PAYMENT_GATEWAY_PROTOCOL='x402-v2'
 export OILSIGNAL_AGENT_PAYMENT_GATEWAY_CREDENTIAL_HEADERS='PAYMENT-SIGNATURE'
 export OILSIGNAL_AGENT_PAYMENT_GATEWAY_BEARER_TOKEN='operator-to-gateway-secret'
 ```
+
+`OILSIGNAL_AGENT_EVIDENCE_PACK_PRICE_USD` is the fallback amount. Exact entries in `OILSIGNAL_AGENT_SKU_PRICES` override it; a JSON `null` explicitly leaves that SKU unpriced. See [`agent-pricing.md`](agent-pricing.md).
 
 Then run:
 
@@ -67,7 +70,7 @@ That operator credential is never copied into buyer-facing headers or bodies.
     "currency": "USD",
     "resource_path": "/api/agent/products/weekly-petroleum-evidence/evidence",
     "evidence_sha256": "...",
-    "external_id": "oilsignal:weekly-petroleum-evidence:sha256:...",
+    "external_id": "oilsignal:weekly-petroleum-evidence:USD:0.05:sha256:...",
     "description": "Weekly Petroleum Brief"
   }
 }
@@ -102,7 +105,7 @@ Example:
     "currency": "USD",
     "resource_path": "/api/agent/products/weekly-petroleum-evidence/evidence",
     "evidence_sha256": "...",
-    "external_id": "oilsignal:weekly-petroleum-evidence:sha256:...",
+    "external_id": "oilsignal:weekly-petroleum-evidence:USD:0.05:sha256:...",
     "description": "Weekly Petroleum Brief"
   },
   "credentials": {
@@ -116,7 +119,7 @@ A successful verification response is:
 ```json
 {
   "protocol": "x402-v2",
-  "external_id": "oilsignal:weekly-petroleum-evidence:sha256:...",
+  "external_id": "oilsignal:weekly-petroleum-evidence:USD:0.05:sha256:...",
   "reference": "optional-settlement-reference",
   "payer": "optional-non-secret-payer-id",
   "response_headers": {
@@ -153,7 +156,7 @@ class PaymentGateway(Protocol):
 
 ## PaymentRequirement
 
-Every changed Evidence Pack creates a requirement containing:
+Every changed paid Evidence Pack creates a requirement containing:
 
 ```text
 sku
@@ -168,8 +171,10 @@ description
 The external operation identity is:
 
 ```text
-oilsignal:<sku>:sha256:<evidence_sha256>
+oilsignal:<sku>:<CURRENCY>:<normalized-amount>:sha256:<evidence_sha256>
 ```
+
+Price terms are deliberately part of the identity. Equivalent decimal spellings such as `0.0050` and `0.005` normalize to the same operation ID, while a real amount or currency change produces a different ID even if the evidence digest is unchanged. This prevents provider-side idempotency keyed by `external_id` from confusing an old settlement with a newly priced requirement.
 
 The payment service should include this value, or an unambiguous cryptographic commitment to it, in provider-side payment intent/authorization metadata whenever the underlying rail permits it.
 
@@ -196,7 +201,7 @@ OilSignal additionally emits vendor-neutral binding and reconciliation metadata 
 
 ```text
 X-OilSignal-Payment-Protocol: <protocol>
-X-OilSignal-Payment-External-ID: oilsignal:<sku>:sha256:<digest>
+X-OilSignal-Payment-External-ID: oilsignal:<sku>:<CURRENCY>:<amount>:sha256:<digest>
 X-OilSignal-Payment-Reference: <optional reference>
 X-OilSignal-Payment-Payer: <optional payer>
 X-OilSignal-Fulfillment-Audit-ID: ful_...
@@ -241,18 +246,18 @@ build/freshness-check evidence
 
 If audit storage cannot commit, OilSignal returns 503 and does not serve the purchased claims. This makes “paid response served” and “local fulfillment event exists” a strong MVP invariant.
 
-There is still an unavoidable distributed-systems ambiguity if the payment provider accepts a charge immediately before OilSignal crashes or fails to commit locally. Production payment services therefore must keep the idempotency/replay semantics described below so a buyer can safely retry the same evidence-bound requirement.
+There is still an unavoidable distributed-systems ambiguity if the payment provider accepts a charge immediately before OilSignal crashes or fails to commit locally. Production payment services therefore must keep the idempotency/replay semantics described below so a buyer can safely retry the same requirement.
 
 The audit stores non-secret reconciliation metadata only: event ID, timestamp, external ID, SKU, evidence digest, amount/currency, resource path, protocol, optional gateway reference, and optional non-secret payer identity. Buyer credentials, protocol receipt headers, operator gateway bearer tokens, private keys, and provider response bodies are not stored.
 
-`external_id` is an evidence identity, not a unique purchase ID. Multiple successful fulfillment events may legitimately share it, so the audit must not be treated as a revenue ledger. Reconcile it with the payment provider's settlement records using `external_id` and `gateway_reference`.
+`external_id` identifies one exact commercial evidence requirement—SKU, price terms, and evidence digest—not a unique purchase event. Multiple successful fulfillment events may legitimately share it, so the audit must not be treated as a revenue ledger. Reconcile it with the payment provider's settlement records using `external_id` and `gateway_reference`.
 
 Operators can inspect the local audit without exposing payer/reference metadata over an unauthenticated HTTP admin endpoint:
 
 ```bash
 oilsignal commerce-audit --data-dir ./data
 oilsignal commerce-audit --data-dir ./data --gateway-reference settlement-123
-oilsignal commerce-audit --data-dir ./data --external-id 'oilsignal:<sku>:sha256:<digest>'
+oilsignal commerce-audit --data-dir ./data --external-id 'oilsignal:<sku>:USD:0.005:sha256:<digest>'
 ```
 
 See [`commerce-audit.md`](commerce-audit.md) for storage fields, retry semantics, CLI filters, and the SQLite deployment boundary.
@@ -267,6 +272,8 @@ A matching `If-None-Match` returns 304 without calling the payment service or ap
 poll -> unchanged -> 304 -> no payment service call / no audit event
 poll -> changed -> 402/verify -> audit commit -> paid fulfillment
 ```
+
+Evidence ETags do not include price. Agents that need to detect price or protocol changes should poll the product `/state` resource, whose `state_sha256` includes commercial terms.
 
 ## Security responsibilities of the payment service
 
@@ -303,13 +310,17 @@ A hosted deployment can still bypass the HTTP bridge and construct the app with 
 app = create_app(
     data_dir=...,
     agent_unit_price_usd=...,
+    agent_sku_prices={
+        "fact-us-crude-stocks": Decimal("0.005"),
+        "crude-balance-evidence": Decimal("0.10"),
+    },
     payment_gateway=my_gateway,
 )
 ```
 
-Custom gateways get the same OilSignal fulfillment-audit behavior because the audit is enforced at the API fulfillment boundary, not inside `HttpPaymentGateway`.
+Custom gateways get the same OilSignal SKU-pricing and fulfillment-audit behavior because both are enforced at the API fulfillment boundary, not inside `HttpPaymentGateway`.
 
-Use `oilsignal.api.app:app` only when you intentionally want the ungated core module-level application. Use `oilsignal.api.server:app` for normal runtime configuration, including the optional HTTP payment bridge.
+Use `oilsignal.api.app:app` only when you intentionally want the ungated core module-level application. Use `oilsignal.api.server:app` for normal runtime configuration, including SKU pricing and the optional HTTP payment bridge.
 
 ## Next after MVP
 
@@ -317,5 +328,5 @@ Keep payment rails separate from the evidence schema and fulfillment audit. Usef
 
 - move commerce audit state to the hosted server database for horizontally distributed deployments;
 - add real MPP, x402, or organization-credit services behind the existing remote gateway contract;
-- add SKU/contract-specific price policies without changing Evidence Pack schemas;
+- add customer/contract-specific pricing and entitlements above the static SKU policy without changing Evidence Pack schemas;
 - optionally add seller-signed fulfillment receipts when buyers need cryptographic proof independent of the payment rail.

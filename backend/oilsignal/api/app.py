@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from decimal import Decimal
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from oilsignal.agent.commerce import (
     PaymentRequirement,
     build_payment_requirement,
 )
+from oilsignal.agent.pricing import ProductPricingPolicy
 from oilsignal.agent.products import (
     AgentCatalog,
     AgentQuote,
@@ -238,14 +240,27 @@ def create_app(
     data_dir: Path | None = None,
     *,
     agent_unit_price_usd: Decimal | None = None,
+    agent_sku_prices: Mapping[str, Decimal | None] | None = None,
     payment_gateway: PaymentGateway | None = None,
 ) -> FastAPI:
     app = FastAPI(title="OilSignal API", version="0.2.0")
     app.state.data_dir = data_dir or settings.data_dir
-    app.state.agent_unit_price_usd = (
+    default_price = (
         agent_unit_price_usd
         if agent_unit_price_usd is not None
         else settings.agent_evidence_pack_price_usd
+    )
+    app.state.agent_unit_price_usd = default_price
+    sku_prices = dict(settings.agent_sku_prices if agent_sku_prices is None else agent_sku_prices)
+    unknown_price_skus = sorted(sku for sku in sku_prices if not product_exists(sku))
+    if unknown_price_skus:
+        raise ValueError(
+            "unknown agent SKU price overrides: " + ", ".join(unknown_price_skus)
+        )
+    app.state.agent_pricing = ProductPricingPolicy(
+        default_amount=default_price,
+        currency=settings.agent_price_currency,
+        sku_amounts=sku_prices,
     )
     app.state.payment_gateway = payment_gateway
     app.add_middleware(
@@ -267,8 +282,11 @@ def create_app(
         observations, _, _ = current_evidence_context()
         return observations
 
-    def commerce_active() -> bool:
-        return app.state.payment_gateway is not None and app.state.agent_unit_price_usd is not None
+    def commerce_active(sku: str) -> bool:
+        return (
+            app.state.payment_gateway is not None
+            and app.state.agent_pricing.amount_for(sku) is not None
+        )
 
     def gateway_vary_header() -> str | None:
         gateway = app.state.payment_gateway
@@ -277,24 +295,19 @@ def create_app(
         return ", ".join(gateway.credential_headers)
 
     def agent_catalog() -> AgentCatalog:
-        catalog = build_agent_catalog(
-            unit_price_usd=app.state.agent_unit_price_usd,
-            currency=settings.agent_price_currency,
-        )
-        if not commerce_active():
-            return catalog
-        products = [
-            product.model_copy(
-                update={
-                    "price": (
-                        product.price.model_copy(update={"enforcement": "http_402"})
-                        if product.price
-                        else None
-                    )
-                }
+        catalog = build_agent_catalog()
+        products = []
+        for product in catalog.products:
+            amount = app.state.agent_pricing.amount_for(product.sku)
+            quote = quote_agent_product(
+                product.sku,
+                unit_price_usd=amount,
+                currency=app.state.agent_pricing.currency,
             )
-            for product in catalog.products
-        ]
+            price = quote.price
+            if commerce_active(product.sku) and price is not None:
+                price = price.model_copy(update={"enforcement": "http_402"})
+            products.append(product.model_copy(update={"price": price}))
         return catalog.model_copy(update={"products": products})
 
     def payment_required_response(
@@ -387,12 +400,13 @@ def create_app(
     def agent_quote(sku: str) -> AgentQuote:
         if not product_exists(sku):
             raise HTTPException(status_code=404, detail=f"unknown agent product: {sku}")
+        amount = app.state.agent_pricing.amount_for(sku)
         quote = quote_agent_product(
             sku,
-            unit_price_usd=app.state.agent_unit_price_usd,
-            currency=settings.agent_price_currency,
+            unit_price_usd=amount,
+            currency=app.state.agent_pricing.currency,
         )
-        if not commerce_active():
+        if not commerce_active(sku):
             return quote
         gateway = app.state.payment_gateway
         price = quote.price.model_copy(update={"enforcement": "http_402"}) if quote.price else None
@@ -484,12 +498,12 @@ def create_app(
             return Response(status_code=304, headers=headers)
 
         gateway = app.state.payment_gateway
-        price = app.state.agent_unit_price_usd
+        price = app.state.agent_pricing.amount_for(sku)
         if gateway is not None and price is not None:
             requirement = build_payment_requirement(
                 sku=pack.sku,
                 amount=price,
-                currency=settings.agent_price_currency,
+                currency=app.state.agent_pricing.currency,
                 evidence_sha256=pack.evidence_sha256,
                 description=pack.title,
             )

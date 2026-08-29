@@ -6,6 +6,8 @@ from typing import Protocol
 
 from pydantic import BaseModel, Field
 
+from oilsignal.agent.pricing import normalized_decimal
+
 
 class PaymentRequirement(BaseModel):
     """The immutable commercial facts a payment must authorize."""
@@ -104,12 +106,16 @@ def build_payment_requirement(
     evidence_sha256: str,
     description: str,
 ) -> PaymentRequirement:
+    currency_code = currency.upper()
     resource_path = f"/api/agent/products/{sku}/evidence"
-    external_id = f"oilsignal:{sku}:sha256:{evidence_sha256}"
+    external_id = (
+        f"oilsignal:{sku}:{currency_code}:{normalized_decimal(amount)}:"
+        f"sha256:{evidence_sha256}"
+    )
     return PaymentRequirement(
         sku=sku,
         amount=amount,
-        currency=currency.upper(),
+        currency=currency_code,
         resource_path=resource_path,
         evidence_sha256=evidence_sha256,
         external_id=external_id,
