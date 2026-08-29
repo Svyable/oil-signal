@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from oilsignal.agent.commerce import VerifiedPayment, build_payment_requirement
+from oilsignal.agent.commerce import build_payment_requirement, VerifiedPayment
 from oilsignal.storage.commerce import list_paid_fulfillments, record_paid_fulfillment
 
 
@@ -92,12 +92,13 @@ def test_paid_fulfillment_audit_rejects_mismatched_or_naive_receipts(tmp_path: P
             verified=mismatch,
         )
 
+    naive = datetime(2026, 8, 29, 9, 0, tzinfo=UTC).replace(tzinfo=None)
     with pytest.raises(ValueError, match="timezone-aware"):
         record_paid_fulfillment(
             tmp_path / "metadata.sqlite",
             requirement=requirement,
             verified=_verified(requirement),
-            fulfilled_at=datetime(2026, 8, 29, 9, 0),
+            fulfilled_at=naive,
         )
 
 
