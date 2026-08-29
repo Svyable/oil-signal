@@ -8,7 +8,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Runtime settings with safe local defaults."""
 
-    model_config = SettingsConfigDict(env_prefix="OILSIGNAL_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="OILSIGNAL_",
+        env_file=".env",
+        env_ignore_empty=True,
+        extra="ignore",
+    )
 
     data_dir: Path = Path("./data")
     eia_api_key: str | None = None
@@ -23,6 +28,12 @@ class Settings(BaseSettings):
     alert_webhook_allow_insecure_http: bool = False
     agent_evidence_pack_price_usd: Decimal | None = Field(default=None, ge=0)
     agent_price_currency: str = Field(default="USD", min_length=3, max_length=3)
+    agent_payment_gateway_url: str | None = None
+    agent_payment_gateway_protocol: str | None = None
+    agent_payment_gateway_credential_headers: str = "Authorization"
+    agent_payment_gateway_bearer_token: SecretStr | None = None
+    agent_payment_gateway_timeout_seconds: float = Field(default=5.0, gt=0)
+    agent_payment_gateway_allow_insecure_http: bool = False
 
     @property
     def parquet_dir(self) -> Path:
