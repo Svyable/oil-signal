@@ -3,7 +3,6 @@ from decimal import Decimal
 from pathlib import Path
 
 from fastapi.testclient import TestClient
-
 from oilsignal.agent.commerce import PaymentRequirement
 from oilsignal.agent.products import build_evidence_pack, quote_agent_product
 from oilsignal.agent.state import build_agent_product_state
