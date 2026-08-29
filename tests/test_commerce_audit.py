@@ -3,8 +3,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-
-from oilsignal.agent.commerce import build_payment_requirement, VerifiedPayment
+from oilsignal.agent.commerce import VerifiedPayment, build_payment_requirement
 from oilsignal.storage.commerce import list_paid_fulfillments, record_paid_fulfillment
 
 
