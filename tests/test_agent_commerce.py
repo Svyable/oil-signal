@@ -3,6 +3,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+
 from oilsignal.agent.commerce import (
     PaymentChallenge,
     PaymentGatewayUnavailable,
@@ -12,6 +13,7 @@ from oilsignal.agent.commerce import (
 )
 from oilsignal.api.app import create_app
 from oilsignal.data_ingestion.fixtures import FixtureIngestor
+from oilsignal.storage.commerce import list_paid_fulfillments
 
 FIXTURE = Path(__file__).parent / "fixtures" / "petroleum_weekly.csv"
 
@@ -125,6 +127,7 @@ def test_paid_evidence_returns_402_without_leaking_pack(data_dir: Path) -> None:
     assert "claims" not in payload
     assert "observations" not in payload
     assert gateway.challenges[0].evidence_sha256 == payload["evidence_sha256"]
+    assert list_paid_fulfillments(data_dir / "metadata.sqlite") == []
 
     quote = client.get("/api/agent/products/weekly-petroleum-evidence/quote").json()
     assert quote["payment_enforcement"] == "http_402"
@@ -154,6 +157,17 @@ def test_paid_evidence_returns_gateway_receipt_bound_to_pack(data_dir: Path) -> 
     assert requirement.evidence_sha256 == payload["evidence_sha256"]
     assert requirement.external_id == response.headers["x-oilsignal-payment-external-id"]
 
+    audit_id = response.headers["x-oilsignal-fulfillment-audit-id"]
+    audits = list_paid_fulfillments(data_dir / "metadata.sqlite")
+    assert len(audits) == 1
+    assert audits[0].id == audit_id
+    assert audits[0].external_id == requirement.external_id
+    assert audits[0].evidence_sha256 == payload["evidence_sha256"]
+    assert audits[0].gateway_reference == "settlement-123"
+    assert audits[0].payer == "agent:buyer"
+    assert audits[0].protocol == "mpp"
+    assert audits[0].amount == Decimal("0.05")
+
 
 def test_invalid_payment_gets_fresh_402_challenge(data_dir: Path) -> None:
     gateway = FakePaymentGateway()
@@ -168,6 +182,7 @@ def test_invalid_payment_gets_fresh_402_challenge(data_dir: Path) -> None:
     assert response.json()["detail"] == "payment credential was rejected"
     assert len(gateway.verifications) == 1
     assert len(gateway.challenges) == 1
+    assert list_paid_fulfillments(data_dir / "metadata.sqlite") == []
 
 
 def test_unchanged_revalidation_is_free_before_payment(data_dir: Path) -> None:
@@ -179,6 +194,7 @@ def test_unchanged_revalidation_is_free_before_payment(data_dir: Path) -> None:
     )
     assert first.status_code == 200
     verification_count = len(gateway.verifications)
+    audit_count = len(list_paid_fulfillments(data_dir / "metadata.sqlite"))
 
     cached = client.get(
         "/api/agent/products/distillate-risk-evidence/evidence",
@@ -189,6 +205,7 @@ def test_unchanged_revalidation_is_free_before_payment(data_dir: Path) -> None:
     assert cached.content == b""
     assert len(gateway.verifications) == verification_count
     assert gateway.challenges == []
+    assert len(list_paid_fulfillments(data_dir / "metadata.sqlite")) == audit_count
 
 
 def test_gateway_without_price_does_not_gate_open_core(data_dir: Path) -> None:
@@ -201,6 +218,7 @@ def test_gateway_without_price_does_not_gate_open_core(data_dir: Path) -> None:
     assert response.status_code == 200
     assert gateway.challenges == []
     assert gateway.verifications == []
+    assert list_paid_fulfillments(data_dir / "metadata.sqlite") == []
 
 
 def test_gateway_unavailable_fails_closed(data_dir: Path) -> None:
@@ -212,6 +230,7 @@ def test_gateway_unavailable_fails_closed(data_dir: Path) -> None:
 
     assert response.status_code == 503
     assert response.json()["detail"] == "payment service unavailable"
+    assert list_paid_fulfillments(data_dir / "metadata.sqlite") == []
 
 
 def test_mismatched_receipt_binding_is_rejected(data_dir: Path) -> None:
@@ -226,6 +245,26 @@ def test_mismatched_receipt_binding_is_rejected(data_dir: Path) -> None:
 
     assert response.status_code == 502
     assert "different evidence requirement" in response.json()["detail"]
+    assert list_paid_fulfillments(data_dir / "metadata.sqlite") == []
+
+
+def test_audit_storage_failure_prevents_paid_pack_delivery(data_dir: Path, monkeypatch) -> None:
+    gateway = FakePaymentGateway()
+    client = _paid_client(data_dir, gateway)
+
+    def fail_audit(*args, **kwargs):
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr("oilsignal.api.app.record_paid_fulfillment", fail_audit)
+    response = client.get(
+        "/api/agent/products/weekly-petroleum-evidence/evidence",
+        headers={"Authorization": "Payment paid-credential"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "paid fulfillment audit storage is unavailable"
+    assert "claims" not in response.json()
+    assert len(gateway.verifications) == 1
 
 
 def test_protocol_adapter_can_use_x402_style_payment_headers(data_dir: Path) -> None:
@@ -250,5 +289,6 @@ def test_protocol_adapter_can_use_x402_style_payment_headers(data_dir: Path) -> 
     assert paid.status_code == 200
     assert paid.headers["payment-response"] == "settled-token"
     assert paid.headers["x-oilsignal-payment-protocol"] == "x402-v2"
+    assert paid.headers["x-oilsignal-fulfillment-audit-id"].startswith("ful_")
     quote = client.get("/api/agent/products/weekly-petroleum-evidence/quote").json()
     assert quote["payment_protocols"] == ["x402-v2"]
