@@ -3,10 +3,10 @@ from decimal import Decimal
 
 import httpx
 import pytest
-
 from oilsignal.agent.commerce import (
     PaymentGatewayUnavailable,
     PaymentRejected,
+    PaymentRequirement,
     build_payment_requirement,
 )
 from oilsignal.agent.http_payment_gateway import (
@@ -17,7 +17,7 @@ from oilsignal.agent.http_payment_gateway import (
 from oilsignal.config import Settings
 
 
-def _requirement():
+def _requirement() -> PaymentRequirement:
     return build_payment_requirement(
         sku="weekly-petroleum-evidence",
         amount=Decimal("0.05"),
@@ -282,3 +282,15 @@ def test_settings_factory_is_off_by_default_and_fails_fast_on_partial_config() -
     assert gateway.protocol == "x402-v2"
     assert gateway.credential_headers == ("PAYMENT-SIGNATURE", "X-PAYMENT-NONCE")
     assert gateway.bearer_token == "operator-secret"
+
+
+def test_empty_optional_environment_values_are_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OILSIGNAL_AGENT_EVIDENCE_PACK_PRICE_USD", "")
+    monkeypatch.setenv("OILSIGNAL_AGENT_PAYMENT_GATEWAY_URL", "")
+    monkeypatch.setenv("OILSIGNAL_AGENT_PAYMENT_GATEWAY_TIMEOUT_SECONDS", "")
+
+    configured = Settings(_env_file=None)
+
+    assert configured.agent_evidence_pack_price_usd is None
+    assert configured.agent_payment_gateway_url is None
+    assert configured.agent_payment_gateway_timeout_seconds == 5.0
