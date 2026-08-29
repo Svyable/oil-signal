@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import SQLAlchemyError
 
 from oilsignal.agent.commerce import (
     PaymentGateway,
@@ -54,6 +55,7 @@ from oilsignal.reports.specialized import (
     RefineryUtilizationWatch,
 )
 from oilsignal.reports.weekly import WeeklyPetroleumBrief
+from oilsignal.storage.commerce import record_paid_fulfillment
 from oilsignal.storage.datasets import DataStatus, inspect_data, load_latest_observations
 
 _RESERVED_COMMERCE_HEADERS = {
@@ -68,6 +70,7 @@ _RESERVED_COMMERCE_HEADERS = {
     "x-oilsignal-payment-reference",
     "x-oilsignal-payment-payer",
     "x-oilsignal-payment-external-id",
+    "x-oilsignal-fulfillment-audit-id",
 }
 
 
@@ -407,7 +410,7 @@ def create_app(
             304: {"description": "Semantic evidence unchanged; no payment required"},
             402: {"description": "Payment required or supplied credential rejected"},
             502: {"description": "Payment adapter returned inconsistent verification data"},
-            503: {"description": "Payment adapter unavailable"},
+            503: {"description": "Payment adapter or fulfillment audit unavailable"},
         },
     )
     def agent_evidence(sku: str, request: Request) -> Response:
@@ -476,6 +479,18 @@ def create_app(
                 verified.response_headers,
                 {**headers, **payment_headers},
             )
+            try:
+                audit = record_paid_fulfillment(
+                    app.state.data_dir / "metadata.sqlite",
+                    requirement=requirement,
+                    verified=verified,
+                )
+            except (OSError, SQLAlchemyError) as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail="paid fulfillment audit storage is unavailable",
+                ) from exc
+            headers["X-OilSignal-Fulfillment-Audit-ID"] = audit.id
 
         return JSONResponse(content=pack.model_dump(mode="json"), headers=headers)
 
