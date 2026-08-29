@@ -17,22 +17,28 @@ GET /api/agent/products
 
 The catalog also points to FastAPI's ordinary OpenAPI document at `/openapi.json`.
 
-Current SKUs:
+Core product families:
 
-| SKU | Purpose |
-| --- | --- |
-| `weekly-petroleum-evidence` | broad weekly U.S. petroleum fundamentals |
-| `distillate-risk-evidence` | PADD 2 distillate inventory plus U.S. distillate product supplied |
-| `refinery-utilization-evidence` | U.S. refinery utilization and deterministic change calculations |
-| `crude-balance-evidence` | partial U.S. crude-flow and commercial-stock reconciliation |
+| SKU / family | Kind | Purpose |
+| --- | --- | --- |
+| `weekly-petroleum-evidence` | `brief` | broad weekly U.S. petroleum fundamentals with current levels and changes |
+| `weekly-petroleum-delta` | `delta` | current-release week-over-week changes only |
+| `distillate-risk-evidence` | `brief` | PADD 2 distillate inventory plus U.S. distillate product supplied |
+| `refinery-utilization-evidence` | `brief` | U.S. refinery utilization and deterministic change calculations |
+| `crude-balance-evidence` | `brief` | partial U.S. crude-flow and commercial-stock reconciliation |
+| `fact-*` | `fact` | one curated maintained weekly series with latest level and week-over-week change |
 
-Every product advertises the same evidence guarantees:
+The curated Fact catalog is documented in [`agent-fact-products.md`](agent-fact-products.md). The weekly change-only event product is documented in [`agent-delta-products.md`](agent-delta-products.md).
+
+Every product advertises the same baseline evidence guarantees:
 
 - freshness is checked before fulfillment;
 - every numerical market claim is cited;
 - derived claims include a deterministic calculation trace;
 - cited observations include the ingestion `raw_hash`;
 - equivalent evidence produces the same `evidence_sha256` even if internal report/claim UUIDs are regenerated.
+
+Product families can advertise stricter guarantees. Fact products add `maintained_series_only`. The weekly delta adds `current_event_week_only` and `week_over_week_changes_only`.
 
 ## Quotes and pricing
 
@@ -236,6 +242,8 @@ If-None-Match: W/"sha256:<previous evidence_sha256>"
 If semantic evidence is unchanged, OilSignal returns `304 Not Modified` with an empty body **before calling the payment gateway**. This is a deliberate product rule: agents can cheaply poll for new petroleum intelligence and pay only when there is a changed pack to receive.
 
 For GET revalidation OilSignal uses weak comparison semantics, so the equivalent quoted tag without the `W/` prefix is also accepted.
+
+For an event-oriented buyer, `weekly-petroleum-delta` applies the same loop to a change-only product. Its digest stays stable until the current weekly change event changes, so the buyer can use the product state/ETag as a stateless cursor without OilSignal storing per-buyer subscription state.
 
 ## Failure semantics
 

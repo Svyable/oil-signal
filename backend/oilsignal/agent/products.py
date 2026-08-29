@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, HttpUrl
 
 from oilsignal.freshness import DatasetFreshness
 from oilsignal.models import CalculationTrace, Claim, ClaimKind, Observation, Report
+from oilsignal.reports.delta import WeeklyPetroleumDelta
 from oilsignal.reports.facts import FACT_PRODUCT_SPECS, FactProductSpec, SeriesFactBrief
 from oilsignal.reports.specialized import (
     CrudeBalanceWatch,
@@ -52,9 +53,9 @@ class AgentCatalog(BaseModel):
     schema_version: str = CATALOG_SCHEMA_VERSION
     service: str = "OilSignal"
     description: str = (
-        "Deterministic U.S. petroleum intelligence products, including briefs and "
-        "single-series facts, with cited evidence, calculation traces, raw-source hashes, "
-        "and cache-stable fingerprints."
+        "Deterministic U.S. petroleum intelligence products, including briefs, weekly "
+        "change deltas, and single-series facts, with cited evidence, calculation traces, "
+        "raw-source hashes, and cache-stable fingerprints."
     )
     openapi_path: str = "/openapi.json"
     discovery_path: str = "/.well-known/oilsignal-agent.json"
@@ -156,6 +157,16 @@ _PRODUCT_DEFINITIONS = (
         builder=lambda observations: WeeklyPetroleumBrief().build(observations),
     ),
     _ProductDefinition(
+        sku="weekly-petroleum-delta",
+        name="Weekly Petroleum Delta",
+        description=(
+            "Current-release week-over-week petroleum changes only, with exact prior/current "
+            "citations and deterministic calculation traces."
+        ),
+        builder=lambda observations: WeeklyPetroleumDelta().build(observations),
+        product_kind="delta",
+    ),
+    _ProductDefinition(
         sku="distillate-risk-evidence",
         name="Distillate Risk Evidence Pack",
         description=(
@@ -220,6 +231,11 @@ def build_agent_catalog(
                 "derived_claims_include_calculation_trace",
                 "cited_observations_include_raw_source_hash",
                 "evidence_sha256_stable_for_equivalent_evidence",
+                *(
+                    ["current_event_week_only", "week_over_week_changes_only"]
+                    if definition.product_kind == "delta"
+                    else []
+                ),
                 *(["maintained_series_only"] if definition.series_id else []),
             ],
             price=price,
