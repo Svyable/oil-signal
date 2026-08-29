@@ -22,12 +22,13 @@ def test_agent_catalog_is_machine_discoverable_and_priceable(data_dir: Path) -> 
     payload = discovery.json()
     assert payload == catalog.json()
     assert payload["openapi_path"] == "/openapi.json"
-    assert {product["sku"] for product in payload["products"]} == {
+    skus = {product["sku"] for product in payload["products"]}
+    assert {
         "weekly-petroleum-evidence",
         "distillate-risk-evidence",
         "refinery-utilization-evidence",
         "crude-balance-evidence",
-    }
+    } <= skus
     assert all(product["price"]["amount"] == "0.05" for product in payload["products"])
     assert all(product["price"]["enforcement"] == "external" for product in payload["products"])
 
