@@ -23,11 +23,18 @@ class WeeklyPetroleumDelta:
         if not observations:
             raise ValueError("cannot build a delta without observations")
 
-        as_of = max(row.observation_date for row in observations)
+        maintained_series = {spec.series_id for spec in self.metrics}
+        scoped_observations = [
+            row for row in observations if row.series_id in maintained_series
+        ]
+        if not scoped_observations:
+            raise ValueError("cannot build a delta without maintained-series observations")
+
+        as_of = max(row.observation_date for row in scoped_observations)
         sections: list[ReportSection] = []
         for spec in self.metrics:
             rows = sorted(
-                [row for row in observations if row.series_id == spec.series_id],
+                [row for row in scoped_observations if row.series_id == spec.series_id],
                 key=lambda row: row.observation_date,
             )
             if len(rows) < 2:
