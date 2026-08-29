@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     alert_webhook_timeout_seconds: float = Field(default=10.0, gt=0)
     alert_webhook_allow_insecure_http: bool = False
     agent_evidence_pack_price_usd: Decimal | None = Field(default=None, ge=0)
+    agent_sku_prices: dict[str, Decimal | None] = Field(default_factory=dict)
     agent_price_currency: str = Field(default="USD", min_length=3, max_length=3)
     agent_payment_gateway_url: str | None = None
     agent_payment_gateway_protocol: str | None = None
