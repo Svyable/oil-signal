@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, HttpUrl
 
 from oilsignal.freshness import DatasetFreshness
 from oilsignal.models import CalculationTrace, Claim, ClaimKind, Observation, Report
+from oilsignal.reports.facts import FACT_PRODUCT_SPECS, FactProductSpec, SeriesFactBrief
 from oilsignal.reports.specialized import (
     CrudeBalanceWatch,
     DistillateSupplyRiskBrief,
@@ -33,6 +34,8 @@ class AgentProduct(BaseModel):
     sku: str
     name: str
     description: str
+    product_kind: str = "brief"
+    series_id: str | None = None
     method: str = "GET"
     state_path: str
     evidence_path: str
@@ -49,8 +52,9 @@ class AgentCatalog(BaseModel):
     schema_version: str = CATALOG_SCHEMA_VERSION
     service: str = "OilSignal"
     description: str = (
-        "Deterministic U.S. petroleum intelligence products with cited evidence, "
-        "calculation traces, raw-source hashes, and cache-stable fingerprints."
+        "Deterministic U.S. petroleum intelligence products, including briefs and "
+        "single-series facts, with cited evidence, calculation traces, raw-source hashes, "
+        "and cache-stable fingerprints."
     )
     openapi_path: str = "/openapi.json"
     discovery_path: str = "/.well-known/oilsignal-agent.json"
@@ -130,6 +134,15 @@ class _ProductDefinition:
     name: str
     description: str
     builder: Callable[[list[Observation]], Report]
+    product_kind: str = "brief"
+    series_id: str | None = None
+
+
+def _fact_builder(spec: FactProductSpec) -> Callable[[list[Observation]], Report]:
+    def build(observations: list[Observation]) -> Report:
+        return SeriesFactBrief(spec).build(observations)
+
+    return build
 
 
 _PRODUCT_DEFINITIONS = (
@@ -169,6 +182,17 @@ _PRODUCT_DEFINITIONS = (
         ),
         builder=lambda observations: CrudeBalanceWatch().build(observations),
     ),
+    *(
+        _ProductDefinition(
+            sku=spec.sku,
+            name=spec.name,
+            description=spec.description,
+            builder=_fact_builder(spec),
+            product_kind="fact",
+            series_id=spec.series_id,
+        )
+        for spec in FACT_PRODUCT_SPECS
+    ),
 )
 
 _PRODUCT_BY_SKU = {definition.sku: definition for definition in _PRODUCT_DEFINITIONS}
@@ -185,6 +209,8 @@ def build_agent_catalog(
             sku=definition.sku,
             name=definition.name,
             description=definition.description,
+            product_kind=definition.product_kind,
+            series_id=definition.series_id,
             state_path=f"/api/agent/products/{definition.sku}/state",
             evidence_path=f"/api/agent/products/{definition.sku}/evidence",
             quote_path=f"/api/agent/products/{definition.sku}/quote",
@@ -194,6 +220,7 @@ def build_agent_catalog(
                 "derived_claims_include_calculation_trace",
                 "cited_observations_include_raw_source_hash",
                 "evidence_sha256_stable_for_equivalent_evidence",
+                *(["maintained_series_only"] if definition.series_id else []),
             ],
             price=price,
         )
