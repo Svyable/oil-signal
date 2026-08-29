@@ -6,7 +6,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from oilsignal.agent.commerce import (
     PaymentChallenge,
@@ -31,6 +31,7 @@ _FORBIDDEN_CREDENTIAL_HEADERS = {
     "transfer-encoding",
     "user-agent",
 }
+_MAX_CREDENTIAL_VALUE_LENGTH = 16384
 _MAX_RESPONSE_HEADERS = 32
 _MAX_HEADER_VALUE_LENGTH = 8192
 
@@ -38,19 +39,19 @@ _MAX_HEADER_VALUE_LENGTH = 8192
 class _ChallengeResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    protocol: str
+    protocol: str = Field(min_length=1, max_length=128)
     response_headers: dict[str, str]
-    challenge_id: str | None = None
+    challenge_id: str | None = Field(default=None, max_length=512)
 
 
 class _VerifyResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    protocol: str
+    protocol: str = Field(min_length=1, max_length=128)
     response_headers: dict[str, str]
-    external_id: str
-    reference: str | None = None
-    payer: str | None = None
+    external_id: str = Field(min_length=1, max_length=1024)
+    reference: str | None = Field(default=None, max_length=512)
+    payer: str | None = Field(default=None, max_length=512)
 
 
 class HttpPaymentGateway:
@@ -239,8 +240,11 @@ def _select_credentials(
     selected: dict[str, str] = {}
     for header_name in credential_headers:
         value = incoming.get(header_name.lower())
-        if value:
-            selected[header_name] = value
+        if not value:
+            continue
+        if len(value) > _MAX_CREDENTIAL_VALUE_LENGTH:
+            raise PaymentRejected("payment credential was rejected")
+        selected[header_name] = value
     return selected
 
 
