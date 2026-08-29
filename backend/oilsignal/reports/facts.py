@@ -139,9 +139,12 @@ class SeriesFactBrief:
 
         snapshot = build_snapshot(rows, self.spec.series_id)
         current = rows[-1]
+        display_label = (
+            f"{self.spec.label} (demand proxy)" if self.spec.demand_proxy else self.spec.label
+        )
         current_claim = Claim(
             text=(
-                f"{self.spec.label} were {snapshot.current:,.1f} {snapshot.unit} as of "
+                f"{display_label} stood at {snapshot.current:,.1f} {snapshot.unit} as of "
                 f"{snapshot.as_of.isoformat()}."
             ),
             kind=ClaimKind.NUMERIC,
@@ -156,7 +159,7 @@ class SeriesFactBrief:
             claims.append(
                 Claim(
                     text=(
-                        f"Week-over-week change in {self.spec.label} was "
+                        f"Week-over-week change in {display_label} was "
                         f"{trace.result:+,.1f} {trace.unit}."
                     ),
                     kind=ClaimKind.NUMERIC,
