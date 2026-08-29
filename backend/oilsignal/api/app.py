@@ -406,7 +406,7 @@ def create_app(
 
     @app.get(
         "/api/agent/products/{sku}/state",
-        response_model=None,
+        response_model=AgentProductState,
         responses={
             304: {"description": "Product evidence and commercial state unchanged"},
             409: {"description": "Product state cannot be built from the current dataset"},
