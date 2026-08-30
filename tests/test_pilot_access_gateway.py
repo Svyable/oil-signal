@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-
 from oilsignal.agent.commerce import PaymentRejected, build_payment_requirement
 from oilsignal.agent.pilot_gateway import (
     PILOT_CREDENTIAL_HEADER,
