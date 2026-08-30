@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     agent_pilot_customer: str = Field(default="founding-pilot", min_length=1, max_length=128)
     agent_pilot_reference: str | None = Field(default=None, max_length=256)
     agent_pilot_skus: str = ""
+    agent_evidence_signing_private_key: SecretStr | None = None
+    agent_evidence_signing_key_id: str | None = Field(default=None, min_length=1, max_length=128)
 
     @property
     def parquet_dir(self) -> Path:
