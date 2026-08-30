@@ -23,7 +23,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+crypto = ["cryptography>=43,<47"]
 dev = [
+  "cryptography>=43,<47",
   "mypy>=1.11,<2",
   "pre-commit>=3.8,<5",
   "pytest>=8.3,<10",
