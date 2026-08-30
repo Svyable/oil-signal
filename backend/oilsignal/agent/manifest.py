@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from hashlib import sha256
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from oilsignal.agent.products import AgentPrice, AgentProduct
 from oilsignal.agent.state import AgentProductState
@@ -27,7 +27,7 @@ class AgentManifestEntry(BaseModel):
     available_for_purchase: bool = False
     price: AgentPrice | None = None
     payment_enforcement: str = "not_configured"
-    payment_protocols: list[str] = []
+    payment_protocols: list[str] = Field(default_factory=list)
 
 
 class AgentChangeManifest(BaseModel):
