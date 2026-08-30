@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
@@ -8,6 +9,9 @@ from fastapi.testclient import TestClient
 from oilsignal.agent.signatures import EvidenceSignature, EvidenceSigner, verify_evidence_signature
 from oilsignal.agent.signing_routes import attach_evidence_signing_routes
 from oilsignal.api.app import create_app
+from oilsignal.data_ingestion.fixtures import FixtureIngestor
+
+FIXTURE = Path(__file__).parent / "fixtures" / "petroleum_weekly.csv"
 
 
 def _signer() -> EvidenceSigner:
@@ -25,7 +29,8 @@ def test_signer_verifies_and_rejects_tampered_digest() -> None:
     assert not verify_evidence_signature(tampered, signer.verification_key())
 
 
-def test_signing_routes_bind_signature_to_current_evidence(data_dir) -> None:
+def test_signing_routes_bind_signature_to_current_evidence(data_dir: Path) -> None:
+    FixtureIngestor(data_dir).ingest_csv(FIXTURE)
     signer = _signer()
     app = create_app(data_dir=data_dir)
     attach_evidence_signing_routes(app, signer)
@@ -44,7 +49,7 @@ def test_signing_routes_bind_signature_to_current_evidence(data_dir) -> None:
     assert key_response.json()["key_id"] == "test-key"
 
 
-def test_signing_routes_are_absent_when_operator_does_not_configure_key(data_dir) -> None:
+def test_signing_routes_are_absent_when_operator_does_not_configure_key(data_dir: Path) -> None:
     app = create_app(data_dir=data_dir)
     attach_evidence_signing_routes(app, None)
     client = TestClient(app)
