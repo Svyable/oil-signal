@@ -4,7 +4,11 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from oilsignal.agent.buyer import BuyerIntegrityError, BuyerPaymentRequired, OilSignalBuyer
+from oilsignal.agent.buyer import (
+    BuyerIntegrityError,
+    BuyerPaymentRequired,
+    OilSignalBuyer,
+)
 from oilsignal.agent.pilot_gateway import PILOT_CREDENTIAL_HEADER, PilotAccessGateway
 from oilsignal.api.app import create_app
 from oilsignal.data_ingestion.fixtures import FixtureIngestor
