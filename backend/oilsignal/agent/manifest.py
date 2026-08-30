@@ -43,12 +43,13 @@ class AgentChangeManifest(BaseModel):
         raise KeyError(sku)
 
     def changed_skus_since(self, previous: AgentChangeManifest) -> list[str]:
+        current_by_sku = {entry.sku: entry for entry in self.products}
         previous_by_sku = {entry.sku: entry for entry in previous.products}
-        return [
-            entry.sku
-            for entry in self.products
-            if previous_by_sku.get(entry.sku) != entry
-        ]
+        return sorted(
+            sku
+            for sku in current_by_sku.keys() | previous_by_sku.keys()
+            if current_by_sku.get(sku) != previous_by_sku.get(sku)
+        )
 
 
 def available_manifest_entry(
