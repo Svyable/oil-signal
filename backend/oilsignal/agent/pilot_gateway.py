@@ -36,8 +36,8 @@ class PilotAccessGateway:
     commercial agreement itself remains outside OilSignal.
     """
 
-    protocol = PILOT_PROTOCOL
-    credential_headers = (PILOT_CREDENTIAL_HEADER,)
+    protocol: str = PILOT_PROTOCOL
+    credential_headers: tuple[str, ...] = (PILOT_CREDENTIAL_HEADER,)
 
     def __init__(
         self,
