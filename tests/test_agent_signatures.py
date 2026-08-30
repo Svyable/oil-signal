@@ -5,8 +5,11 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
-
-from oilsignal.agent.signatures import EvidenceSignature, EvidenceSigner, verify_evidence_signature
+from oilsignal.agent.signatures import (
+    EvidenceSignature,
+    EvidenceSigner,
+    verify_evidence_signature,
+)
 from oilsignal.agent.signing_routes import attach_evidence_signing_routes
 from oilsignal.api.app import create_app
 from oilsignal.data_ingestion.fixtures import FixtureIngestor
