@@ -6,6 +6,7 @@ import httpx
 from pydantic import BaseModel
 
 from oilsignal.agent.commerce import PaymentProblem
+from oilsignal.agent.manifest import AgentChangeManifest
 from oilsignal.agent.products import AgentCatalog, AgentQuote, EvidencePack
 from oilsignal.agent.state import AgentProductState
 
@@ -25,6 +26,12 @@ class BuyerPaymentRequired(BuyerClientError):
         super().__init__(problem.detail)
         self.problem = problem
         self.headers = dict(headers)
+
+
+class ManifestPoll(BaseModel):
+    not_modified: bool
+    etag: str | None = None
+    manifest: AgentChangeManifest | None = None
 
 
 class StatePoll(BaseModel):
@@ -76,6 +83,29 @@ class OilSignalBuyer:
         response = self._client.get(f"/api/agent/products/{sku}/quote")
         response.raise_for_status()
         return AgentQuote.model_validate(response.json())
+
+    def poll_manifest(self, *, etag: str | None = None) -> ManifestPoll:
+        headers = {"If-None-Match": etag} if etag else None
+        response = self._client.get("/api/agent/manifest", headers=headers)
+        if response.status_code == 304:
+            return ManifestPoll(not_modified=True, etag=response.headers.get("etag"))
+        response.raise_for_status()
+        manifest = AgentChangeManifest.model_validate(response.json())
+        _require_header_identity(
+            response,
+            "x-oilsignal-manifest-sha256",
+            manifest.manifest_sha256,
+            label="catalog manifest",
+        )
+        expected_etag = f'W/"sha256:{manifest.manifest_sha256}"'
+        returned_etag = response.headers.get("etag")
+        if returned_etag != expected_etag:
+            raise BuyerIntegrityError("catalog manifest ETag does not match manifest digest")
+        return ManifestPoll(
+            not_modified=False,
+            etag=returned_etag,
+            manifest=manifest,
+        )
 
     def poll_state(self, sku: str, *, etag: str | None = None) -> StatePoll:
         headers = {"If-None-Match": etag} if etag else None

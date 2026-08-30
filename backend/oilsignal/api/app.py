@@ -18,6 +18,13 @@ from oilsignal.agent.commerce import (
     PaymentRequirement,
     build_payment_requirement,
 )
+from oilsignal.agent.manifest import (
+    AgentChangeManifest,
+    AgentManifestEntry,
+    available_manifest_entry,
+    build_change_manifest,
+    unavailable_manifest_entry,
+)
 from oilsignal.agent.pricing import ProductPricingPolicy
 from oilsignal.agent.products import (
     AgentCatalog,
@@ -395,6 +402,51 @@ def create_app(
     @app.get("/api/agent/products", response_model=AgentCatalog)
     def agent_products() -> AgentCatalog:
         return agent_catalog()
+
+    @app.get(
+        "/api/agent/manifest",
+        response_model=AgentChangeManifest,
+        responses={
+            304: {"description": "Catalog evidence and commercial states unchanged"},
+            409: {"description": "Catalog state cannot be built from the current dataset"},
+        },
+    )
+    def agent_manifest(request: Request) -> Response:
+        try:
+            data_status = inspect_data(app.state.data_dir)
+            observations = load_latest_observations(app.state.data_dir)
+            freshness = check_wpsr_freshness(
+                observations,
+                live_eia=data_status.is_live_eia,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        entries: list[AgentManifestEntry] = []
+        for product in agent_catalog().products:
+            try:
+                pack = build_evidence_pack(
+                    product.sku,
+                    observations,
+                    freshness=freshness,
+                    data_source=data_status.source,
+                    source_fetched_at=data_status.latest_fetched_at,
+                )
+                state = build_agent_product_state(pack, agent_quote(product.sku))
+                entries.append(available_manifest_entry(product, state))
+            except ValueError as exc:
+                entries.append(unavailable_manifest_entry(product, str(exc)))
+
+        manifest = build_change_manifest(entries)
+        etag = f'W/"sha256:{manifest.manifest_sha256}"'
+        headers = {
+            "ETag": etag,
+            "Cache-Control": "private, max-age=0, must-revalidate",
+            "X-OilSignal-Manifest-SHA256": manifest.manifest_sha256,
+        }
+        if _etag_matches(request.headers.get("if-none-match"), etag):
+            return Response(status_code=304, headers=headers)
+        return JSONResponse(content=manifest.model_dump(mode="json"), headers=headers)
 
     @app.get("/api/agent/products/{sku}/quote", response_model=AgentQuote)
     def agent_quote(sku: str) -> AgentQuote:
