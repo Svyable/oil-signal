@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     agent_payment_gateway_bearer_token: SecretStr | None = None
     agent_payment_gateway_timeout_seconds: float = Field(default=5.0, gt=0)
     agent_payment_gateway_allow_insecure_http: bool = False
+    agent_pilot_access_key: SecretStr | None = None
+    agent_pilot_customer: str = Field(default="founding-pilot", min_length=1, max_length=128)
+    agent_pilot_reference: str | None = Field(default=None, max_length=256)
+    agent_pilot_skus: str = ""
 
     @property
     def parquet_dir(self) -> Path:
