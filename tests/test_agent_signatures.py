@@ -25,9 +25,9 @@ def test_signer_verifies_and_rejects_tampered_digest() -> None:
     assert not verify_evidence_signature(tampered, signer.verification_key())
 
 
-def test_signing_routes_bind_signature_to_current_evidence(fixture_data_dir) -> None:
+def test_signing_routes_bind_signature_to_current_evidence(data_dir) -> None:
     signer = _signer()
-    app = create_app(data_dir=fixture_data_dir)
+    app = create_app(data_dir=data_dir)
     attach_evidence_signing_routes(app, signer)
     client = TestClient(app)
 
@@ -44,8 +44,8 @@ def test_signing_routes_bind_signature_to_current_evidence(fixture_data_dir) -> 
     assert key_response.json()["key_id"] == "test-key"
 
 
-def test_signing_routes_are_absent_when_operator_does_not_configure_key(fixture_data_dir) -> None:
-    app = create_app(data_dir=fixture_data_dir)
+def test_signing_routes_are_absent_when_operator_does_not_configure_key(data_dir) -> None:
+    app = create_app(data_dir=data_dir)
     attach_evidence_signing_routes(app, None)
     client = TestClient(app)
 
