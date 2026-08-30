@@ -10,7 +10,10 @@ from pydantic import BaseModel, Field
 try:
     from cryptography.exceptions import InvalidSignature
     from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PrivateKey,
+        Ed25519PublicKey,
+    )
 except ImportError:  # pragma: no cover - optional runtime capability
     InvalidSignature = Exception  # type: ignore[assignment,misc]
     serialization = None  # type: ignore[assignment]
