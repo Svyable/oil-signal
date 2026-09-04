@@ -1,3 +1,4 @@
+from oilsignal.agent.commercial_routes import attach_commercial_routes
 from oilsignal.agent.runtime_gateway import build_runtime_payment_gateway
 from oilsignal.agent.runtime_signer import build_runtime_evidence_signer
 from oilsignal.agent.signing_routes import attach_evidence_signing_routes
@@ -5,4 +6,5 @@ from oilsignal.api.app import create_app
 from oilsignal.config import settings
 
 app = create_app(payment_gateway=build_runtime_payment_gateway(settings))
+attach_commercial_routes(app)
 attach_evidence_signing_routes(app, build_runtime_evidence_signer(settings))
