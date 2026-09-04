@@ -1,7 +1,6 @@
 from pathlib import Path
 
 from fastapi.testclient import TestClient
-
 from oilsignal.agent.commercial import build_commercial_catalog
 from oilsignal.agent.commercial_routes import attach_commercial_routes
 from oilsignal.agent.products import product_exists
